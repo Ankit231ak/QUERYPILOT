@@ -2,7 +2,7 @@
 
 > ### 🎥 Result Video 
 > 
-> ![QueryPilot Result Video](Project.mp4)
+> ![QueryPilot Result Video](./Project.mp4)
 
 ---
 

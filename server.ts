@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
@@ -13,6 +14,9 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Persistent API Keys File Path
+const API_KEYS_FILE = path.join(process.cwd(), "api_keys.json");
+
 // In-memory keys & endpoints store
 const apiKeys: Record<string, string> = {
   Groq: process.env.GROQ_API_KEY || "",
@@ -22,8 +26,47 @@ const apiKeys: Record<string, string> = {
   OpenRouter: process.env.OPENROUTER_API_KEY || ""
 };
 
-let localEndpointUrl = process.env.LOCAL_MODEL_URL || "http://localhost:11434/v1";
+let localEndpointUrl = process.env.LOCAL_MODEL_URL || "http://localhost:1234/v1";
 let cacheEnabledGlobally = true;
+
+// Load API Keys from api_keys.json file on server start
+function loadApiKeysFromFile() {
+  try {
+    if (fs.existsSync(API_KEYS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(API_KEYS_FILE, "utf-8"));
+      if (data.apiKeys && typeof data.apiKeys === "object") {
+        Object.assign(apiKeys, data.apiKeys);
+      }
+      if (data.localEndpointUrl && typeof data.localEndpointUrl === "string") {
+        localEndpointUrl = data.localEndpointUrl;
+      }
+      if (typeof data.cacheEnabledGlobally === "boolean") {
+        cacheEnabledGlobally = data.cacheEnabledGlobally;
+      }
+      console.log("Successfully loaded persistent API keys from api_keys.json");
+    }
+  } catch (err) {
+    console.error("Failed to load api_keys.json:", err);
+  }
+}
+
+// Save API Keys to api_keys.json file permanently
+function saveApiKeysToFile() {
+  try {
+    const data = {
+      apiKeys,
+      localEndpointUrl,
+      cacheEnabledGlobally
+    };
+    fs.writeFileSync(API_KEYS_FILE, JSON.stringify(data, null, 2), "utf-8");
+    console.log("Saved API keys to api_keys.json");
+  } catch (err) {
+    console.error("Failed to save api_keys.json:", err);
+  }
+}
+
+// Initialize persistent file loading
+loadApiKeysFromFile();
 
 interface CacheEntry {
   promptKey: string;
@@ -92,6 +135,7 @@ app.get("/api/health", (_req, res) => {
       OpenRouter: Boolean(apiKeys.OpenRouter),
       Local: true
     },
+    apiKeys,
     localEndpointUrl,
     cacheEnabled: cacheEnabledGlobally,
     cacheSize: queryCache.size,
@@ -99,7 +143,7 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-// Config updates
+// Config updates & permanent file saving to api_keys.json
 app.post("/api/config", (req, res) => {
   const { provider, apiKey, localUrl, cacheEnabled } = req.body;
   if (provider && typeof apiKey === "string") {
@@ -111,7 +155,10 @@ app.post("/api/config", (req, res) => {
   if (typeof cacheEnabled === "boolean") {
     cacheEnabledGlobally = cacheEnabled;
   }
-  return res.json({ success: true, message: "Configuration updated successfully." });
+
+  saveApiKeysToFile();
+
+  return res.json({ success: true, message: "Configuration updated and saved to api_keys.json." });
 });
 
 // Clear Cache endpoint
@@ -447,7 +494,7 @@ async function generateSqlWithProvider(
       ? localEndpointUrl
       : `${localEndpointUrl.replace(/\/$/, "")}/chat/completions`;
 
-    // Direct User Message Injection for Local LLMs (Ollama / LM Studio) to guarantee local models see live database tables!
+    // Direct User Message Injection for Local LLMs (Ollama / LM Studio)
     const combinedLocalUserMessage = `${systemPrompt}\n\n====================\n${userPrompt}\n====================\nCRITICAL LOCAL MODEL RULE: Return ONLY a JSON object with {"sql": "...", "explanation": "..."}. You MUST ONLY use table and column names that exist in the DATABASE SCHEMA above!`;
 
     const resp = await fetch(url, {

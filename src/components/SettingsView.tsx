@@ -2,15 +2,28 @@ import React, { useState, useEffect } from 'react';
 import { AIProvider } from '../types';
 
 export const SettingsView: React.FC = () => {
-  const [keys, setKeys] = useState<Record<string, string>>({
-    Groq: '',
-    Gemini: '',
-    OpenAI: '',
-    Claude: '',
-    OpenRouter: ''
+  const [keys, setKeys] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('querypilot_saved_keys');
+      return saved ? JSON.parse(saved) : {
+        Groq: '',
+        Gemini: '',
+        OpenAI: '',
+        Claude: '',
+        OpenRouter: ''
+      };
+    } catch {
+      return {
+        Groq: '',
+        Gemini: '',
+        OpenAI: '',
+        Claude: '',
+        OpenRouter: ''
+      };
+    }
   });
 
-  const [localUrl, setLocalUrl] = useState('http://localhost:11434/v1');
+  const [localUrl, setLocalUrl] = useState('http://localhost:1234/v1');
   const [cacheEnabled, setCacheEnabled] = useState(true);
   const [cacheSize, setCacheSize] = useState(0);
 
@@ -34,6 +47,16 @@ export const SettingsView: React.FC = () => {
       .then(res => res.json())
       .then(data => {
         if (data.providers) setProviderStatuses(data.providers);
+        if (data.apiKeys) {
+          setKeys(prev => {
+            const updated = { ...prev };
+            Object.keys(data.apiKeys).forEach(k => {
+              if (data.apiKeys[k]) updated[k] = data.apiKeys[k];
+            });
+            localStorage.setItem('querypilot_saved_keys', JSON.stringify(updated));
+            return updated;
+          });
+        }
         if (data.localEndpointUrl) setLocalUrl(data.localEndpointUrl);
         if (typeof data.cacheEnabled === 'boolean') setCacheEnabled(data.cacheEnabled);
         if (typeof data.cacheSize === 'number') setCacheSize(data.cacheSize);
@@ -44,6 +67,10 @@ export const SettingsView: React.FC = () => {
   useEffect(() => {
     fetchHealth();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('querypilot_saved_keys', JSON.stringify(keys));
+  }, [keys]);
 
   const handleSaveProviderKey = async (provider: AIProvider) => {
     setIsSaving(true);
@@ -119,9 +146,9 @@ export const SettingsView: React.FC = () => {
       </header>
 
       {savedProvider && (
-        <div className="bg-[#4ae176]/10 border border-[#4ae176]/30 text-[#4ae176] p-3 rounded-lg text-xs md:text-sm flex items-center gap-2">
+        <div className="bg-[#4ae176]/10 border border-[#4ae176]/30 text-[#4ae176] p-3 rounded-lg text-xs md:text-sm flex items-center gap-2 font-semibold">
           <span className="material-symbols-outlined text-[18px]">check_circle</span>
-          Configuration for {savedProvider} updated successfully!
+          Configuration for {savedProvider} saved permanently to api_keys.json!
         </div>
       )}
 
@@ -197,7 +224,7 @@ export const SettingsView: React.FC = () => {
         </p>
       </div>
 
-      {/* Multi-AI Provider API Key Cards */}
+      {/* Multi-AI Provider API Key Cards (Saved permanently in api_keys.json) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         
         {/* Groq API */}
@@ -209,7 +236,7 @@ export const SettingsView: React.FC = () => {
             <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
               providerStatuses.Groq ? 'bg-[#4ae176]/20 text-[#4ae176]' : 'bg-amber-500/20 text-amber-300'
             }`}>
-              {providerStatuses.Groq ? 'Connected' : 'Key Needed'}
+              {providerStatuses.Groq ? 'Connected & Saved' : 'Key Needed'}
             </span>
           </div>
           <input
@@ -240,7 +267,7 @@ export const SettingsView: React.FC = () => {
             <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
               providerStatuses.Gemini ? 'bg-[#4ae176]/20 text-[#4ae176]' : 'bg-amber-500/20 text-amber-300'
             }`}>
-              {providerStatuses.Gemini ? 'Connected' : 'Key Needed'}
+              {providerStatuses.Gemini ? 'Connected & Saved' : 'Key Needed'}
             </span>
           </div>
           <input
@@ -271,7 +298,7 @@ export const SettingsView: React.FC = () => {
             <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
               providerStatuses.OpenAI ? 'bg-[#4ae176]/20 text-[#4ae176]' : 'bg-amber-500/20 text-amber-300'
             }`}>
-              {providerStatuses.OpenAI ? 'Connected' : 'Key Needed'}
+              {providerStatuses.OpenAI ? 'Connected & Saved' : 'Key Needed'}
             </span>
           </div>
           <input
@@ -302,7 +329,7 @@ export const SettingsView: React.FC = () => {
             <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
               providerStatuses.Claude ? 'bg-[#4ae176]/20 text-[#4ae176]' : 'bg-amber-500/20 text-amber-300'
             }`}>
-              {providerStatuses.Claude ? 'Connected' : 'Key Needed'}
+              {providerStatuses.Claude ? 'Connected & Saved' : 'Key Needed'}
             </span>
           </div>
           <input
@@ -333,7 +360,7 @@ export const SettingsView: React.FC = () => {
             <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
               providerStatuses.OpenRouter ? 'bg-[#4ae176]/20 text-[#4ae176]' : 'bg-amber-500/20 text-amber-300'
             }`}>
-              {providerStatuses.OpenRouter ? 'Connected' : 'Key Needed'}
+              {providerStatuses.OpenRouter ? 'Connected & Saved' : 'Key Needed'}
             </span>
           </div>
           <input
@@ -361,17 +388,17 @@ export const SettingsView: React.FC = () => {
             <h3 className="font-bold text-sm text-[#e2e2e6] flex items-center gap-2">
               <span className="material-symbols-outlined text-[#4ae176]">computer</span> Local AI Endpoint
             </h3>
-            <span className="text-[10px] bg-[#4ae176]/20 text-[#4ae176] px-2 py-0.5 rounded font-mono font-semibold">Active</span>
+            <span className="text-[10px] bg-[#4ae176]/20 text-[#4ae176] px-2 py-0.5 rounded font-mono font-semibold">Active & Saved</span>
           </div>
           <input
             type="text"
             value={localUrl}
             onChange={(e) => setLocalUrl(e.target.value)}
-            placeholder="http://localhost:11434/v1"
+            placeholder="http://localhost:1234/v1"
             className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2 text-xs outline-none focus:border-[#947dff] font-mono"
           />
           <div className="flex justify-between items-center pt-1">
-            <span className="text-[11px] text-[#938ea1]">Ollama / LM Studio / LocalAI</span>
+            <span className="text-[11px] text-[#938ea1]">LM Studio / Ollama / LocalAI</span>
             <button
               onClick={() => handleSaveProviderKey('Local')}
               disabled={isSaving}

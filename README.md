@@ -1,8 +1,12 @@
 # QueryPilot - Multi-Engine AI SQL Workspace
 
-> ### 🎥 Result Video 
-> 
-> <video src="./Project.mp4" controls></video>
+<h2>🎥 Result Video</h2>
+
+<video
+  src="https://github.com/Ankit231ak/QUERYPILOT/issues/1"
+  controls
+  width="100%">
+</video>
 
 ---
 

@@ -1,13 +1,8 @@
 # QueryPilot - Multi-Engine AI SQL Workspace
 
-<h2>🎥 Result Video</h2>
+## 🎥 Result Video
 
-<video
-  src="[https://github.com/Ankit231ak/QUERYPILOT/issues/1](https://github.com/Ankit231ak/QUERYPILOT/issues/1#issue-5119110133)"
-  controls
-  width="100%">
-</video>
-
+https://github.com/user-attachments/assets/12345678-abcd-1234-abcd-123456789abc
 ---
 
 ## What You Built

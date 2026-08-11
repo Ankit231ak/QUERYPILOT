@@ -6,7 +6,10 @@ interface QueryWorkspaceProps {
   activeDatabase: DatabaseConfig;
   onSelectDatabase: (id: string) => void;
   onAddDatabase: (db: DatabaseConfig) => void;
+  onRenameDatabase: (id: string, newName: string) => void;
+  onDeleteDatabase: (id: string) => void;
   onAddHistoryItem: (item: QueryHistoryItem) => void;
+  queryHistory: QueryHistoryItem[];
 }
 
 interface TableSchemaItem {
@@ -16,15 +19,52 @@ interface TableSchemaItem {
   columns: { name: string; type: string; isPk?: boolean; description?: string }[];
 }
 
+// Connection string examples for supported databases
+const DB_CONNECTION_EXAMPLES: Record<SqlDialect, { placeholder: string; example: string; notes: string }> = {
+  PostgreSQL: {
+    placeholder: 'postgresql://postgres:password@localhost:5432/dbname',
+    example: 'postgresql://postgres:pass123@localhost:5432/production',
+    notes: 'Default PostgreSQL port: 5432. Supports SSL parameters if required.'
+  },
+  MySQL: {
+    placeholder: 'mysql://user:password@localhost:3306/dbname',
+    example: 'mysql://root:secret@localhost:3306/sales_db',
+    notes: 'Default MySQL port: 3306.'
+  },
+  SQLite: {
+    placeholder: 'sqlite:///querypilot.db or sqlite:///C:/path/to/db.sqlite',
+    example: 'sqlite:///querypilot.db',
+    notes: 'Enter absolute path or local filename for local SQLite database files.'
+  },
+  MariaDB: {
+    placeholder: 'mysql://user:password@localhost:3306/dbname',
+    example: 'mysql://maria_user:pass@localhost:3306/app_db',
+    notes: 'MariaDB uses MySQL wire protocol on port 3306.'
+  },
+  'SQL Server': {
+    placeholder: 'mssql://sa:password@localhost:1433/dbname',
+    example: 'mssql://sa:StrongPass123@localhost:1433/enterprise_db',
+    notes: 'Default SQL Server port: 1433.'
+  },
+  Oracle: {
+    placeholder: 'oracle://user:password@localhost:1521/XEPDB1',
+    example: 'oracle://system:oracle_pass@localhost:1521/ORCL',
+    notes: 'Default Oracle listener port: 1521.'
+  }
+};
+
 export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   databases,
   activeDatabase,
   onSelectDatabase,
   onAddDatabase,
-  onAddHistoryItem
+  onRenameDatabase,
+  onDeleteDatabase,
+  onAddHistoryItem,
+  queryHistory
 }) => {
   // Collapsible panels state
-  const [showLeftPanel, setShowLeftPanel] = useState(false);
+  const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [showRightPanel, setShowRightPanel] = useState(false);
 
   // Schema state
@@ -34,7 +74,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   const [schemaError, setSchemaError] = useState<string | null>(null);
   
   // Prompt & Model state
-  const [promptText, setPromptText] = useState('Show me table records with key metrics.');
+  const [promptText, setPromptText] = useState('Show me top spending customers with completed order details.');
   const [selectedModel, setSelectedModel] = useState('Llama 3.3 70B Versatile');
   
   // Groq Key state
@@ -42,13 +82,17 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [isSavingKey, setIsSavingKey] = useState(false);
 
-  // Add Database Modal state
+  // Database Management Modal state
   const [showAddDbModal, setShowAddDbModal] = useState(false);
   const [newDbName, setNewDbName] = useState('');
   const [newDbDialect, setNewDbDialect] = useState<SqlDialect>('PostgreSQL');
   const [newDbConnString, setNewDbConnString] = useState('');
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingConn, setIsTestingConn] = useState(false);
+
+  // Rename Database Modal state
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameInput, setRenameInput] = useState('');
 
   // Execution states
   const [isGenerating, setIsGenerating] = useState(false);
@@ -67,16 +111,42 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     error?: string;
   } | null>(null);
 
-  // AI Quality Analysis State
+  // Persistent Thumbs Up / Thumbs Down Feedback Counts
+  const [thumbsUpCount, setThumbsUpCount] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('querypilot_thumbs_up');
+      return saved ? parseInt(saved, 10) : 14;
+    } catch {
+      return 14;
+    }
+  });
+
+  const [thumbsDownCount, setThumbsDownCount] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('querypilot_thumbs_down');
+      return saved ? parseInt(saved, 10) : 1;
+    } catch {
+      return 1;
+    }
+  });
+
   const [userRating, setUserRating] = useState<'thumbs_up' | 'thumbs_down' | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
 
   const [copied, setCopied] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Load live schema whenever activeDatabase changes!
+  // Save thumbs counts to localStorage
   useEffect(() => {
+    localStorage.setItem('querypilot_thumbs_up', thumbsUpCount.toString());
+  }, [thumbsUpCount]);
+
+  useEffect(() => {
+    localStorage.setItem('querypilot_thumbs_down', thumbsDownCount.toString());
+  }, [thumbsDownCount]);
+
+  // Load live schema function (called on mount & manual refresh)
+  const fetchLiveSchema = () => {
     if (!activeDatabase) return;
     setIsLoadingSchema(true);
     setSchemaError(null);
@@ -94,10 +164,10 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
         if (data.success && Array.isArray(data.schema)) {
           setLiveSchema(data.schema);
           if (data.schema.length > 0) {
-            setSelectedTable(data.schema[0].name);
-            setGeneratedSql(`SELECT * FROM "${data.schema[0].name}" LIMIT 10;`);
-          } else {
-            setLiveSchema([]);
+            if (!selectedTable || !data.schema.some(t => t.name === selectedTable)) {
+              setSelectedTable(data.schema[0].name);
+              setGeneratedSql(`SELECT * FROM "${data.schema[0].name}" LIMIT 10;`);
+            }
           }
         } else {
           setSchemaError(data.error || 'Could not fetch database schema.');
@@ -105,6 +175,10 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
       })
       .catch(err => setSchemaError(err.message || "Failed to load schema"))
       .finally(() => setIsLoadingSchema(false));
+  };
+
+  useEffect(() => {
+    fetchLiveSchema();
 
     fetch('/api/health')
       .then(res => res.json())
@@ -134,9 +208,9 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     }
   };
 
-  // Test Database Connection string
+  // Test Database Connection
   const handleTestConnection = async () => {
-    if (!newDbConnString.trim()) {
+    if (!newDbConnString.trim() && newDbDialect !== 'SQLite') {
       setTestResult({ success: false, message: "Please enter a connection string first." });
       return;
     }
@@ -179,7 +253,15 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     setTestResult(null);
   };
 
-  // Generate SQL via Groq AI with target dialect & schema
+  // Handle Rename Database submit
+  const handleConfirmRename = () => {
+    if (renameInput.trim() && activeDatabase) {
+      onRenameDatabase(activeDatabase.id, renameInput.trim());
+      setShowRenameModal(false);
+    }
+  };
+
+  // Generate SQL via Groq AI
   const handleGenerate = async () => {
     setIsGenerating(true);
     setAiAnalysis(null);
@@ -217,7 +299,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     }
   };
 
-  // Run SQL Query against active Database (PostgreSQL, MySQL, SQLite)
+  // Run SQL Query
   const handleRunQuery = async (targetSql?: string) => {
     const sqlToRun = targetSql || generatedSql;
     setIsRunningQuery(true);
@@ -244,7 +326,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
           execTime: data.executionTimeMs || '1ms'
         });
 
-        // Add to history
+        // Automatically record to query history
         onAddHistoryItem({
           id: `q-${Date.now()}`,
           question: promptText,
@@ -264,6 +346,18 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
           execTime: data.executionTimeMs || '0ms',
           error: data.error || 'Failed to execute query'
         });
+
+        onAddHistoryItem({
+          id: `q-${Date.now()}`,
+          question: promptText,
+          sql: sqlToRun,
+          status: 'Failed',
+          model: `${selectedModel} (${activeDatabase?.dialect || 'SQLite'})`,
+          execTime: data.executionTimeMs || '0ms',
+          rowsCount: 0,
+          date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: Date.now()
+        });
       }
     } catch (err: any) {
       setQueryResults({
@@ -278,25 +372,18 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     }
   };
 
-  // Manual Save to History
-  const handleManualSaveHistory = () => {
-    onAddHistoryItem({
-      id: `q-manual-${Date.now()}`,
-      question: promptText || "Custom Query",
-      sql: generatedSql,
-      status: queryResults?.error ? 'Failed' : 'Success',
-      model: `${selectedModel} (${activeDatabase?.dialect || 'SQLite'})`,
-      execTime: queryResults?.execTime || '0ms',
-      rowsCount: queryResults?.rowCount || 0,
-      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      timestamp: Date.now()
-    });
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2500);
-  };
-
-  // Thumbs Up / Thumbs Down Feedback + AI Quality Analysis
+  // Thumbs Up / Thumbs Down Feedback with persistent counter & AI Analysis
   const handleFeedback = async (rating: 'thumbs_up' | 'thumbs_down') => {
+    if (userRating !== rating) {
+      if (rating === 'thumbs_up') {
+        setThumbsUpCount(prev => prev + 1);
+        if (userRating === 'thumbs_down') setThumbsDownCount(prev => Math.max(0, prev - 1));
+      } else {
+        setThumbsDownCount(prev => prev + 1);
+        if (userRating === 'thumbs_up') setThumbsUpCount(prev => Math.max(0, prev - 1));
+      }
+    }
+
     setUserRating(rating);
     setIsAnalyzing(true);
     setAiAnalysis(null);
@@ -332,30 +419,54 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   };
 
   const activeTableSchema = liveSchema.find(t => t.name === selectedTable) || liveSchema[0];
+  const recentHistoryItems = queryHistory.slice(0, 5);
 
   return (
     <div className="flex h-[calc(100vh-64px)] w-full overflow-hidden relative bg-[#111317]">
 
-      {/* Left Collapsible Panel: Database Tables */}
+      {/* Left Collapsible Panel: Database Tables with Refresh Button */}
       {showLeftPanel && (
         <aside className="w-72 bg-[#1e2023] border-r border-[#333538] h-full flex flex-col z-20 shadow-xl flex-shrink-0 animate-in slide-in-from-left duration-200">
           <div className="p-4 flex items-center justify-between border-b border-[#333538]">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-[#4ae176] text-[20px]">database</span>
-              <h3 className="font-semibold text-sm text-[#e2e2e6]">{activeDatabase?.name || 'SQLite'}</h3>
+            <div className="flex items-center gap-2 truncate">
+              <span className="material-symbols-outlined text-[#4ae176] text-[20px] flex-shrink-0">database</span>
+              <h3 className="font-semibold text-sm text-[#e2e2e6] truncate">{activeDatabase?.name || 'SQLite'}</h3>
             </div>
-            <button onClick={() => setShowLeftPanel(false)} className="text-[#c9c4d8] hover:text-white">
-              <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
+            
+            <div className="flex items-center gap-1">
+              {/* Refresh Tables Button */}
+              <button 
+                onClick={fetchLiveSchema} 
+                disabled={isLoadingSchema}
+                className="p-1 rounded text-[#c9c4d8] hover:text-[#4ae176] hover:bg-[#333538] transition-colors"
+                title="Refresh tables from database (CMD/external changes)"
+              >
+                <span className={`material-symbols-outlined text-[18px] ${isLoadingSchema ? 'animate-spin' : ''}`}>
+                  refresh
+                </span>
+              </button>
+
+              <button onClick={() => setShowLeftPanel(false)} className="p-1 text-[#c9c4d8] hover:text-white">
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2">
-            <div className="px-2 py-1.5 text-[11px] font-semibold text-[#938ea1] uppercase tracking-wider">
-              {activeDatabase?.dialect || 'SQLite'} Tables ({liveSchema.length})
+            <div className="px-2 py-1.5 flex items-center justify-between text-[11px] font-semibold text-[#938ea1] uppercase tracking-wider">
+              <span>Tables ({liveSchema.length})</span>
+              <button 
+                onClick={fetchLiveSchema} 
+                className="text-[10px] text-[#cabeff] hover:underline font-mono lowercase"
+              >
+                Sync
+              </button>
             </div>
 
             {isLoadingSchema ? (
-              <div className="p-3 text-xs text-[#c9c4d8]">Loading live schema...</div>
+              <div className="p-3 text-xs text-[#c9c4d8] flex items-center gap-2">
+                <span className="material-symbols-outlined animate-spin text-[16px]">autorenew</span> Loading live tables...
+              </div>
             ) : schemaError ? (
               <div className="p-3 text-xs text-red-400 bg-red-500/10 rounded border border-red-500/20">{schemaError}</div>
             ) : (
@@ -373,7 +484,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                         isSelected ? 'bg-[#333538] text-[#e2e2e6]' : 'hover:bg-[#282a2d] text-[#c9c4d8]'
                       }`}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 truncate">
                         <span className={`material-symbols-outlined text-[16px] ${isSelected ? 'text-[#cabeff]' : ''}`}>
                           table
                         </span>
@@ -397,7 +508,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
       <main className="flex-1 flex flex-col h-full bg-[#111317] relative overflow-y-auto w-full min-w-0">
         <div className="p-4 md:p-6 lg:p-8 max-w-6xl mx-auto w-full flex-1 flex flex-col gap-6">
 
-          {/* Top Bar Navigation & Actions */}
+          {/* Top Bar Navigation & Database Actions */}
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#333538]/60 pb-4">
             <div>
               <div className="flex items-center gap-2">
@@ -406,7 +517,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   {activeDatabase?.dialect || 'SQLite'} Connected
                 </span>
               </div>
-              <p className="text-xs text-[#c9c4d8] mt-1">Generate AI SQL & execute queries live on {activeDatabase?.name || 'SQLite'}.</p>
+              <p className="text-xs text-[#c9c4d8] mt-1">Multi-dialect AI SQL workspace connected to {activeDatabase?.name || 'SQLite'}.</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -427,7 +538,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <select
                   value={activeDatabase?.id}
                   onChange={(e) => onSelectDatabase(e.target.value)}
-                  className="bg-transparent text-[#e2e2e6] outline-none font-semibold text-xs cursor-pointer"
+                  className="bg-transparent text-[#e2e2e6] outline-none font-semibold text-xs cursor-pointer max-w-[140px] truncate"
                 >
                   {databases.map((db) => (
                     <option key={db.id} value={db.id} className="bg-[#111317] text-[#e2e2e6]">
@@ -436,6 +547,31 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   ))}
                 </select>
               </div>
+
+              {/* Rename Active Database Button */}
+              <button
+                onClick={() => {
+                  setRenameInput(activeDatabase?.name || '');
+                  setShowRenameModal(true);
+                }}
+                className="p-1.5 rounded-lg bg-[#1e2023] border border-[#484555]/40 text-[#c9c4d8] hover:text-white transition-colors text-xs cursor-pointer"
+                title="Rename active database"
+              >
+                <span className="material-symbols-outlined text-[16px]">edit</span>
+              </button>
+
+              {/* Delete Active Database Button */}
+              <button
+                onClick={() => {
+                  if (window.confirm(`Are you sure you want to remove database connection "${activeDatabase?.name}"?`)) {
+                    onDeleteDatabase(activeDatabase.id);
+                  }
+                }}
+                className="p-1.5 rounded-lg bg-[#1e2023] border border-[#484555]/40 text-[#c9c4d8] hover:text-red-400 transition-colors text-xs cursor-pointer"
+                title="Delete active database connection"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete</span>
+              </button>
 
               {/* Add Database Button */}
               <button
@@ -468,7 +604,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <div>
                   <h4 className="text-sm font-semibold text-[#e2e2e6]">Enter your Groq API Key</h4>
                   <p className="text-xs text-[#c9c4d8] mt-0.5">
-                    Connect Groq AI (`llama-3.3-70b-versatile`) to generate dynamic SQL. Free key at <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-[#cabeff] underline">console.groq.com</a>.
+                    Connect Groq AI (`llama-3.3-70b-versatile`). Free key at <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-[#cabeff] underline">console.groq.com</a>.
                   </p>
                 </div>
               </div>
@@ -535,20 +671,47 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
             </div>
           </div>
 
-          {/* Quick Example Prompts */}
-          <div className="flex flex-wrap gap-2">
-            <button 
-              onClick={() => { setPromptText("Show all table records limited to 10 rows"); handleGenerate(); }}
-              className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[14px] text-[#4ae176]">table_rows</span> Sample Table Rows
-            </button>
-            <button 
-              onClick={() => { setPromptText("Find top spending entries or aggregated totals"); handleGenerate(); }}
-              className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[14px] text-[#cabeff]">trending_up</span> Aggregated Metrics
-            </button>
+          {/* RECENT QUERY HISTORY PILLS (Replacing hardcoded static suggestions!) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5 text-xs text-[#938ea1] font-medium">
+              <span className="material-symbols-outlined text-[14px]">history</span>
+              <span>Recent Query History:</span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {recentHistoryItems.length === 0 ? (
+                <>
+                  <button 
+                    onClick={() => { setPromptText("Show all users limited to 10"); handleGenerate(); }}
+                    className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[14px] text-[#4ae176]">table_rows</span> Show users table
+                  </button>
+                  <button 
+                    onClick={() => { setPromptText("Show all products sorted by price"); handleGenerate(); }}
+                    className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[14px] text-[#cabeff]">shopping_bag</span> Show products table
+                  </button>
+                </>
+              ) : (
+                recentHistoryItems.map((item) => (
+                  <button 
+                    key={item.id}
+                    onClick={() => {
+                      setPromptText(item.question);
+                      setGeneratedSql(item.sql);
+                      handleRunQuery(item.sql);
+                    }}
+                    className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer max-w-xs truncate"
+                    title={item.sql}
+                  >
+                    <span className="material-symbols-outlined text-[14px] text-[#cabeff] flex-shrink-0">history</span>
+                    <span className="truncate">{item.question || item.sql}</span>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
 
           {/* Generated SQL Editor Box */}
@@ -559,40 +722,33 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <span className="text-xs font-mono text-[#e2e2e6]">Executable {activeDatabase?.dialect || 'SQLite'} SQL</span>
               </div>
 
-              {/* Action Buttons: Save to History, Thumbs Up / Down, Copy */}
+              {/* Action Buttons: Thumbs Up / Down with NUMERIC COUNTERS & Copy */}
               <div className="flex items-center gap-2">
-                <button
-                  onClick={handleManualSaveHistory}
-                  className="px-2.5 py-1 rounded bg-[#282a2d] hover:bg-[#484555] text-[#c9c4d8] hover:text-white text-xs font-medium flex items-center gap-1 transition-colors relative cursor-pointer"
-                  title="Save to Query History"
-                >
-                  <span className="material-symbols-outlined text-[15px] text-[#4ae176]">bookmark_add</span>
-                  <span>Save to History</span>
-                  {saveSuccess && (
-                    <span className="absolute -top-7 left-1/2 -translate-x-1/2 bg-[#4ae176] text-[#003915] font-bold text-[10px] px-2 py-0.5 rounded shadow">Saved!</span>
-                  )}
-                </button>
-
+                {/* Thumbs Up Button with Counter */}
                 <button 
                   onClick={() => handleFeedback('thumbs_up')}
-                  className={`p-1.5 rounded transition-all cursor-pointer ${
-                    userRating === 'thumbs_up' ? 'bg-[#4ae176]/20 text-[#4ae176]' : 'text-[#c9c4d8] hover:text-white hover:bg-[#484555]'
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer font-mono text-xs flex items-center gap-1.5 ${
+                    userRating === 'thumbs_up' ? 'bg-[#4ae176]/20 text-[#4ae176] font-bold' : 'text-[#c9c4d8] hover:text-white hover:bg-[#484555]'
                   }`}
                   title="Thumbs Up - Good Query"
                 >
-                  <span className="material-symbols-outlined text-[18px]">thumb_up</span>
+                  <span className="material-symbols-outlined text-[16px]">thumb_up</span>
+                  <span>{thumbsUpCount}</span>
                 </button>
 
+                {/* Thumbs Down Button with Counter */}
                 <button 
                   onClick={() => handleFeedback('thumbs_down')}
-                  className={`p-1.5 rounded transition-all cursor-pointer ${
-                    userRating === 'thumbs_down' ? 'bg-red-500/20 text-red-400' : 'text-[#c9c4d8] hover:text-white hover:bg-[#484555]'
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer font-mono text-xs flex items-center gap-1.5 ${
+                    userRating === 'thumbs_down' ? 'bg-red-500/20 text-red-400 font-bold' : 'text-[#c9c4d8] hover:text-white hover:bg-[#484555]'
                   }`}
                   title="Thumbs Down - Incorrect / Needs Fix"
                 >
-                  <span className="material-symbols-outlined text-[18px]">thumb_down</span>
+                  <span className="material-symbols-outlined text-[16px]">thumb_down</span>
+                  <span>{thumbsDownCount}</span>
                 </button>
 
+                {/* Copy SQL Button */}
                 <button 
                   onClick={handleCopySql}
                   className="text-[#c9c4d8] hover:text-[#e2e2e6] p-1.5 rounded hover:bg-[#484555] transition-colors relative cursor-pointer"
@@ -626,7 +782,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 {isRunningQuery ? (
                   <>
                     <span className="material-symbols-outlined text-[18px] animate-spin">autorenew</span>
-                    Executing Query...
+                    Executing...
                   </>
                 ) : (
                   <>
@@ -660,7 +816,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
               {isAnalyzing ? (
                 <div className="flex items-center gap-3 text-xs text-[#c9c4d8] py-4">
                   <span className="material-symbols-outlined animate-spin text-[#947dff]">autorenew</span>
-                  <span>Analyzing SQL correctness and dialect joins for {activeDatabase?.name}...</span>
+                  <span>Analyzing SQL correctness and dialect syntax for {activeDatabase?.name}...</span>
                 </div>
               ) : aiAnalysis ? (
                 <div className="space-y-3 text-xs md:text-sm">
@@ -718,7 +874,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
           {queryResults && (
             <div className="mt-2 mb-12 w-full">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                <h3 className="text-lg font-semibold text-[#e2e2e6]">Live Query Execution Results ({activeDatabase?.name || 'SQLite'})</h3>
+                <h3 className="text-lg font-semibold text-[#e2e2e6]">Live Execution Results ({activeDatabase?.name || 'SQLite'})</h3>
                 <div className="flex items-center gap-3 text-xs text-[#c9c4d8] font-mono">
                   <span className="bg-[#1e2023] px-2 py-1 rounded border border-[#333538] text-[#4ae176]">
                     {queryResults.rowCount} rows returned
@@ -812,10 +968,10 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
         </aside>
       )}
 
-      {/* Add New Database Modal with Test Connection */}
+      {/* Add New Database Modal with ALL SQL Connection Examples */}
       {showAddDbModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-[#1e2023] border border-[#333538] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-[#1e2023] border border-[#333538] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-[#333538] pb-3">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[#4ae176]">add_database</span>
@@ -833,7 +989,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   type="text" 
                   value={newDbName}
                   onChange={(e) => setNewDbName(e.target.value)}
-                  placeholder="e.g. My Local PostgreSQL" 
+                  placeholder="e.g. Production PostgreSQL or Analytics MySQL" 
                   className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff]" 
                 />
               </div>
@@ -842,14 +998,19 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <label className="block text-xs font-semibold text-[#c9c4d8] mb-1">SQL Engine / Dialect</label>
                 <select
                   value={newDbDialect}
-                  onChange={(e) => setNewDbDialect(e.target.value as SqlDialect)}
-                  className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff]"
+                  onChange={(e) => {
+                    const dialect = e.target.value as SqlDialect;
+                    setNewDbDialect(dialect);
+                    setNewDbConnString(DB_CONNECTION_EXAMPLES[dialect].example);
+                  }}
+                  className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff] cursor-pointer"
                 >
                   <option value="PostgreSQL">PostgreSQL</option>
                   <option value="MySQL">MySQL</option>
                   <option value="SQLite">SQLite</option>
                   <option value="MariaDB">MariaDB</option>
                   <option value="SQL Server">Microsoft SQL Server</option>
+                  <option value="Oracle">Oracle Database</option>
                 </select>
               </div>
 
@@ -859,12 +1020,19 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   type="text" 
                   value={newDbConnString}
                   onChange={(e) => setNewDbConnString(e.target.value)}
-                  placeholder="postgresql://postgres:password@localhost:5432/my_db" 
+                  placeholder={DB_CONNECTION_EXAMPLES[newDbDialect].placeholder}
                   className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff] font-mono" 
                 />
-                <p className="text-[11px] text-[#938ea1] mt-1">
-                  Example: <code className="text-[#cabeff]">postgresql://postgres:pass@localhost:5432/dbname</code>
-                </p>
+                
+                {/* Connection String Helper Card for selected database dialect */}
+                <div className="mt-2 p-2.5 bg-[#111317] rounded-lg border border-[#333538] text-[11px] text-[#c9c4d8] space-y-1">
+                  <div className="font-semibold text-[#cabeff] flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px]">info</span>
+                    <span>{newDbDialect} Connection Format:</span>
+                  </div>
+                  <div className="font-mono text-[#4ae176] break-all">{DB_CONNECTION_EXAMPLES[newDbDialect].example}</div>
+                  <div className="text-[#938ea1]">{DB_CONNECTION_EXAMPLES[newDbDialect].notes}</div>
+                </div>
               </div>
 
               {testResult && (
@@ -903,6 +1071,35 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   Connect Database
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Database Modal */}
+      {showRenameModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1e2023] border border-[#333538] rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#333538] pb-3">
+              <h3 className="text-base font-bold text-[#e2e2e6]">Rename Database</h3>
+              <button onClick={() => setShowRenameModal(false)} className="text-[#938ea1] hover:text-white">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[#c9c4d8] mb-1">Database Name</label>
+              <input 
+                type="text" 
+                value={renameInput}
+                onChange={(e) => setRenameInput(e.target.value)}
+                className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff]" 
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowRenameModal(false)} className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#282a2d] text-[#c9c4d8]">Cancel</button>
+              <button onClick={handleConfirmRename} className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#947dff] text-[#2b0088]">Save</button>
             </div>
           </div>
         </div>

@@ -21,28 +21,45 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
   onSelectDatabase
 }) => {
   const [liveTables, setLiveTables] = useState<TableSchemaItem[]>([]);
-  const [activeTableName, setActiveTableName] = useState('orders');
+  const [activeTableName, setActiveTableName] = useState('');
   const [activeTab, setActiveTab] = useState<'columns' | 'sample'>('columns');
   const [searchFilter, setSearchFilter] = useState('');
+  const [isLoadingSchema, setIsLoadingSchema] = useState(false);
   
   // Sample data preview state
   const [sampleRows, setSampleRows] = useState<any[]>([]);
   const [sampleCols, setSampleCols] = useState<string[]>([]);
   const [isLoadingSample, setIsLoadingSample] = useState(false);
 
-  useEffect(() => {
-    fetch('/api/schema')
+  const fetchLiveSchema = () => {
+    if (!activeDatabase) return;
+    setIsLoadingSchema(true);
+    fetch('/api/schema', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dialect: activeDatabase.dialect,
+        connectionString: activeDatabase.connectionString
+      })
+    })
       .then(res => res.json())
       .then(data => {
-        if (data.schema && Array.isArray(data.schema)) {
+        if (data.success && Array.isArray(data.schema)) {
           setLiveTables(data.schema);
           if (data.schema.length > 0) {
-            setActiveTableName(data.schema[0].name);
+            if (!activeTableName || !data.schema.some(t => t.name === activeTableName)) {
+              setActiveTableName(data.schema[0].name);
+            }
           }
         }
       })
-      .catch(err => console.error("Failed to load schema:", err));
-  }, []);
+      .catch(err => console.error("Failed to load schema:", err))
+      .finally(() => setIsLoadingSchema(false));
+  };
+
+  useEffect(() => {
+    fetchLiveSchema();
+  }, [activeDatabase]);
 
   // Fetch sample data when switching to Sample Data tab or changing active table
   useEffect(() => {
@@ -51,7 +68,11 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
       fetch('/api/execute-sql', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql: `SELECT * FROM "${activeTableName}" LIMIT 10;` })
+        body: JSON.stringify({
+          sql: `SELECT * FROM "${activeTableName}" LIMIT 10;`,
+          dialect: activeDatabase?.dialect || 'SQLite',
+          connectionString: activeDatabase?.connectionString
+        })
       })
         .then(res => res.json())
         .then(data => {
@@ -63,7 +84,7 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
         .catch(err => console.error("Failed to fetch sample data:", err))
         .finally(() => setIsLoadingSample(false));
     }
-  }, [activeTab, activeTableName]);
+  }, [activeTab, activeTableName, activeDatabase]);
 
   const activeTable = liveTables.find(t => t.name === activeTableName) || liveTables[0];
 
@@ -76,10 +97,23 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#333538] pb-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-[#e2e2e6] mb-1">Database Explorer</h1>
-          <p className="text-sm md:text-base text-[#c9c4d8]">Inspect schemas, data types, and live records across your databases.</p>
+          <p className="text-sm md:text-base text-[#c9c4d8]">Inspect live schemas, column types, and records across your databases.</p>
         </div>
         
         <div className="flex items-center gap-3">
+          {/* Refresh Schema Button */}
+          <button
+            onClick={fetchLiveSchema}
+            disabled={isLoadingSchema}
+            className="px-3 py-1.5 rounded-lg bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] border border-[#484555]/40 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Refresh database schema"
+          >
+            <span className={`material-symbols-outlined text-[16px] ${isLoadingSchema ? 'animate-spin' : ''}`}>
+              refresh
+            </span>
+            <span>Refresh Schema</span>
+          </button>
+
           {/* Database Selector Dropdown */}
           <div className="flex items-center bg-[#1e2023] border border-[#484555]/40 rounded-lg px-3 py-1.5 text-xs">
             <span className="material-symbols-outlined text-[18px] text-[#4ae176] mr-2">database</span>
@@ -105,6 +139,15 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
         {/* Left List of Tables */}
         <div className="lg:col-span-4 bg-[#1e2023] border border-[#333538] rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-[#938ea1] uppercase tracking-wider">
+              Tables ({liveTables.length})
+            </span>
+            <button onClick={fetchLiveSchema} className="text-[10px] text-[#cabeff] hover:underline font-mono">
+              Sync
+            </button>
+          </div>
+
           <div className="relative">
             <span className="material-symbols-outlined text-[#938ea1] text-[18px] absolute left-3 top-2.5">search</span>
             <input 
@@ -116,30 +159,36 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
             />
           </div>
 
-          <div className="space-y-1 overflow-y-auto max-h-[500px]">
-            {filteredTables.map((table) => {
-              const isSelected = activeTableName === table.name;
-              return (
-                <div
-                  key={table.id}
-                  onClick={() => setActiveTableName(table.name)}
-                  className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
-                    isSelected ? 'bg-[#333538] text-[#e2e2e6] border border-[#484555]/50' : 'hover:bg-[#282a2d] text-[#c9c4d8]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className={`material-symbols-outlined text-[18px] ${isSelected ? 'text-[#cabeff]' : ''}`}>
-                      table
+          {isLoadingSchema ? (
+            <div className="text-xs text-[#c9c4d8] p-3 flex items-center gap-2">
+              <span className="material-symbols-outlined animate-spin text-[16px]">autorenew</span> Loading tables...
+            </div>
+          ) : (
+            <div className="space-y-1 overflow-y-auto max-h-[500px]">
+              {filteredTables.map((table) => {
+                const isSelected = activeTableName === table.name;
+                return (
+                  <div
+                    key={table.id}
+                    onClick={() => setActiveTableName(table.name)}
+                    className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
+                      isSelected ? 'bg-[#333538] text-[#e2e2e6] border border-[#484555]/50' : 'hover:bg-[#282a2d] text-[#c9c4d8]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className={`material-symbols-outlined text-[18px] ${isSelected ? 'text-[#cabeff]' : ''}`}>
+                        table
+                      </span>
+                      <span className="text-sm font-semibold">{table.name}</span>
+                    </div>
+                    <span className="text-xs font-mono bg-[#111317] px-2 py-0.5 rounded text-[#4ae176]">
+                      {table.rowCount}
                     </span>
-                    <span className="text-sm font-semibold">{table.name}</span>
                   </div>
-                  <span className="text-xs font-mono bg-[#111317] px-2 py-0.5 rounded text-[#4ae176]">
-                    {table.rowCount}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Right Table Detail Panel */}

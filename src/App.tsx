@@ -15,20 +15,6 @@ const DEFAULT_DATABASES: DatabaseConfig[] = [
     connectionString: 'sqlite:///querypilot.db',
     status: 'connected',
     isDefault: true
-  },
-  {
-    id: 'db-postgres-prod',
-    name: 'PostgreSQL Analytics DB',
-    dialect: 'PostgreSQL',
-    connectionString: 'postgresql://prod_user:***@postgres.internal:5432/analytics',
-    status: 'connected'
-  },
-  {
-    id: 'db-mysql-sales',
-    name: 'MySQL Sales Database',
-    dialect: 'MySQL',
-    connectionString: 'mysql://sales_admin:***@mysql.internal:3306/sales_db',
-    status: 'connected'
   }
 ];
 
@@ -88,7 +74,6 @@ export default function App() {
 
   const handleAddHistoryItem = (item: QueryHistoryItem) => {
     setQueryHistory(prev => {
-      // Prevent duplicate exact same timestamp
       const filtered = prev.filter(h => h.id !== item.id);
       return [item, ...filtered];
     });
@@ -102,6 +87,22 @@ export default function App() {
   const handleAddDatabase = (newDb: DatabaseConfig) => {
     setDatabases(prev => [...prev, newDb]);
     setActiveDatabaseId(newDb.id);
+  };
+
+  const handleRenameDatabase = (id: string, newName: string) => {
+    setDatabases(prev => prev.map(db => db.id === id ? { ...db, name: newName } : db));
+  };
+
+  const handleDeleteDatabase = (id: string) => {
+    if (databases.length <= 1) {
+      alert("You must keep at least one database connection.");
+      return;
+    }
+    const filtered = databases.filter(db => db.id !== id);
+    setDatabases(filtered);
+    if (activeDatabaseId === id) {
+      setActiveDatabaseId(filtered[0].id);
+    }
   };
 
   const handleGlobalSearch = (query: string) => {
@@ -139,7 +140,10 @@ export default function App() {
             activeDatabase={activeDatabase}
             onSelectDatabase={(id) => setActiveDatabaseId(id)}
             onAddDatabase={handleAddDatabase}
+            onRenameDatabase={handleRenameDatabase}
+            onDeleteDatabase={handleDeleteDatabase}
             onAddHistoryItem={handleAddHistoryItem}
+            queryHistory={queryHistory}
           />
         )}
 

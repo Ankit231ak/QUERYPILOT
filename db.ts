@@ -1,31 +1,177 @@
 import sqlite3 from "sqlite3";
 import path from "path";
+import pg from "pg";
+import mysql from "mysql2/promise";
 
 const dbPath = path.join(process.cwd(), "querypilot.db");
-const db = new sqlite3.Database(dbPath);
+const sqliteDb = new sqlite3.Database(dbPath);
 
-// Helper to run query returning all rows
+export interface DatabaseTargetConfig {
+  dialect?: "SQLite" | "PostgreSQL" | "MySQL" | "MariaDB" | "SQL Server" | "Oracle";
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  password?: string;
+}
+
+// Default SQLite query runners
 export function queryAll(sql: string, params: any[] = []): Promise<any[]> {
   return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
+    sqliteDb.all(sql, params, (err, rows) => {
       if (err) reject(err);
       else resolve(rows || []);
     });
   });
 }
 
-// Helper to execute SQL statement
 export function runSql(sql: string, params: any[] = []): Promise<void> {
   return new Promise((resolve, reject) => {
-    db.run(sql, params, (err) => {
+    sqliteDb.run(sql, params, (err) => {
       if (err) reject(err);
       else resolve();
     });
   });
 }
 
-// Helper to fetch live database schema
-export async function getDbSchema() {
+// Execute query on Target Database (PostgreSQL, MySQL, SQLite)
+export async function executeTargetQuery(
+  sql: string,
+  config?: DatabaseTargetConfig
+): Promise<{ rows: any[]; columns: string[] }> {
+  const dialect = config?.dialect || "SQLite";
+  const connStr = config?.connectionString;
+
+  if (dialect === "PostgreSQL" && connStr && connStr.includes("postgres")) {
+    const client = new pg.Client({ connectionString: connStr });
+    await client.connect();
+    try {
+      const res = await client.query(sql);
+      const columns = res.fields ? res.fields.map((f) => f.name) : [];
+      return { rows: res.rows || [], columns };
+    } finally {
+      await client.end();
+    }
+  }
+
+  if ((dialect === "MySQL" || dialect === "MariaDB") && connStr && connStr.includes("mysql")) {
+    const connection = await mysql.createConnection(connStr);
+    try {
+      const [rows, fields] = await connection.query(sql);
+      const columns = Array.isArray(fields) ? fields.map((f) => f.name) : [];
+      return { rows: Array.isArray(rows) ? (rows as any[]) : [], columns };
+    } finally {
+      await connection.end();
+    }
+  }
+
+  // Default to SQLite
+  const rows = await queryAll(sql);
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  return { rows, columns };
+}
+
+// Fetch live database schema for target DB (PostgreSQL, MySQL, SQLite)
+export async function getTargetSchema(config?: DatabaseTargetConfig) {
+  const dialect = config?.dialect || "SQLite";
+  const connStr = config?.connectionString;
+
+  if (dialect === "PostgreSQL" && connStr && connStr.includes("postgres")) {
+    const client = new pg.Client({ connectionString: connStr });
+    await client.connect();
+    try {
+      const tablesRes = await client.query(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';`
+      );
+      const schema: any[] = [];
+
+      for (const tRow of tablesRes.rows) {
+        const tableName = tRow.table_name;
+        const colRes = await client.query(
+          `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1;`,
+          [tableName]
+        );
+        const pkRes = await client.query(
+          `SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_name = $1;`,
+          [tableName]
+        );
+        const pkCols = new Set(pkRes.rows.map((r) => r.column_name));
+
+        let count = "0 rows";
+        try {
+          const countRes = await client.query(`SELECT COUNT(*) as count FROM "${tableName}";`);
+          count = `${countRes.rows[0]?.count || 0} rows`;
+        } catch {
+          count = "0 rows";
+        }
+
+        schema.push({
+          id: tableName,
+          name: tableName,
+          rowCount: count,
+          columns: colRes.rows.map((c) => ({
+            name: c.column_name,
+            type: c.data_type.toUpperCase(),
+            isPk: pkCols.has(c.column_name),
+            description: pkCols.has(c.column_name) ? "Primary Key" : ""
+          }))
+        });
+      }
+
+      return schema;
+    } finally {
+      await client.end();
+    }
+  }
+
+  if ((dialect === "MySQL" || dialect === "MariaDB") && connStr && connStr.includes("mysql")) {
+    const connection = await mysql.createConnection(connStr);
+    try {
+      const [tableRows]: any = await connection.query(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE();`
+      );
+      const schema: any[] = [];
+
+      for (const tRow of tableRows) {
+        const tableName = tRow.TABLE_NAME || tRow.table_name;
+        const [colRows]: any = await connection.query(
+          `SELECT column_name, data_type, column_key FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?;`,
+          [tableName]
+        );
+
+        let count = "0 rows";
+        try {
+          const [countRes]: any = await connection.query(`SELECT COUNT(*) as count FROM \`${tableName}\`;`);
+          count = `${countRes[0]?.count || 0} rows`;
+        } catch {
+          count = "0 rows";
+        }
+
+        schema.push({
+          id: tableName,
+          name: tableName,
+          rowCount: count,
+          columns: colRows.map((c: any) => ({
+            name: c.COLUMN_NAME || c.column_name,
+            type: (c.DATA_TYPE || c.data_type).toUpperCase(),
+            isPk: (c.COLUMN_KEY || c.column_key) === "PRI",
+            description: (c.COLUMN_KEY || c.column_key) === "PRI" ? "Primary Key" : ""
+          }))
+        });
+      }
+
+      return schema;
+    } finally {
+      await connection.end();
+    }
+  }
+
+  // Default SQLite Schema
+  return getSQLiteSchema();
+}
+
+export async function getSQLiteSchema() {
   const tables: any[] = await queryAll(
     `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`
   );
@@ -53,7 +199,44 @@ export async function getDbSchema() {
   return schema;
 }
 
-// Initialize and Seed Database if empty
+// Test Database Connection Endpoint helper
+export async function testConnection(config: DatabaseTargetConfig) {
+  const dialect = config.dialect || "SQLite";
+  const connStr = config.connectionString;
+
+  if (dialect === "PostgreSQL") {
+    if (!connStr || !connStr.includes("postgres")) {
+      throw new Error("Invalid PostgreSQL connection string. Format: postgresql://user:pass@host:5432/dbname");
+    }
+    const client = new pg.Client({ connectionString: connStr });
+    await client.connect();
+    try {
+      const res = await client.query("SELECT version();");
+      const ver = res.rows[0]?.version || "PostgreSQL";
+      return `Connected successfully to ${ver.split(",")[0]}`;
+    } finally {
+      await client.end();
+    }
+  }
+
+  if (dialect === "MySQL" || dialect === "MariaDB") {
+    if (!connStr || !connStr.includes("mysql")) {
+      throw new Error("Invalid MySQL connection string. Format: mysql://user:pass@host:3306/dbname");
+    }
+    const connection = await mysql.createConnection(connStr);
+    try {
+      const [rows]: any = await connection.query("SELECT VERSION() as version;");
+      const ver = rows[0]?.version || "MySQL";
+      return `Connected successfully to MySQL ${ver}`;
+    } finally {
+      await connection.end();
+    }
+  }
+
+  return "Connected successfully to local SQLite database.";
+}
+
+// Initialize and Seed SQLite Database if empty
 export async function initDb() {
   await runSql(`
     CREATE TABLE IF NOT EXISTS users (
@@ -113,12 +296,10 @@ export async function initDb() {
     );
   `);
 
-  // Check if users table has data
   const usersCount: any[] = await queryAll(`SELECT COUNT(*) as count FROM users;`);
   if (usersCount[0].count === 0) {
     console.log("Seeding SQLite database with realistic sample data...");
 
-    // Seed Users
     const usersData = [
       ["John Smith", "john.smith@example.com", "North America", "2024-01-15"],
       ["Sarah Connor", "sarah.c@example.com", "North America", "2024-01-18"],
@@ -129,12 +310,7 @@ export async function initDb() {
       ["Marcus Vance", "marcus.v@enterprise.org", "North America", "2024-03-01"],
       ["Chloe Bennett", "chloe.b@designhub.co", "Europe", "2024-03-05"],
       ["David Kim", "dkim@seoul.kr", "Asia Pacific", "2024-03-12"],
-      ["Maria Garcia", "maria.g@madrid.es", "Europe", "2024-03-15"],
-      ["Liam O'Connor", "liam.oc@dublin.ie", "Europe", "2024-03-20"],
-      ["Aisha Patel", "aisha.p@london.uk", "Europe", "2024-03-22"],
-      ["Carlos Silva", "carlos.s@rio.br", "South America", "2024-03-25"],
-      ["Emily Watson", "emily.w@sydney.au", "Asia Pacific", "2024-03-28"],
-      ["Noah Taylor", "noah.t@toronto.ca", "North America", "2024-04-01"]
+      ["Maria Garcia", "maria.g@madrid.es", "Europe", "2024-03-15"]
     ];
 
     for (const [name, email, region, created] of usersData) {
@@ -144,18 +320,12 @@ export async function initDb() {
       );
     }
 
-    // Seed Products
     const productsData = [
       ["QueryPilot Pro Enterprise License", "Software", 499.0, 150, 4.9],
       ["Cloud Analytics Server Suite", "Software", 1299.0, 50, 4.8],
       ["Data Sync Gateway Hardware", "Hardware", 849.0, 32, 4.6],
       ["High-Performance Database Node", "Hardware", 2199.0, 18, 4.9],
-      ["AI SQL Query Accelerator", "Software", 299.0, 500, 4.7],
-      ["Managed Backup Appliance", "Hardware", 599.0, 40, 4.4],
-      ["Developer Desktop Workstation", "Hardware", 1499.0, 25, 4.8],
-      ["Real-time Streaming Pipeline", "Software", 799.0, 100, 4.5],
-      ["Security Audit & Compliance Suite", "Software", 649.0, 80, 4.6],
-      ["Edge Processing Unit v2", "Hardware", 449.0, 60, 4.3]
+      ["AI SQL Query Accelerator", "Software", 299.0, 500, 4.7]
     ];
 
     for (const [name, cat, price, stock, rating] of productsData) {
@@ -165,28 +335,10 @@ export async function initDb() {
       );
     }
 
-    // Seed Orders
     const ordersData = [
       [1, "2024-03-01", 1497.0, "completed", "Credit Card"],
       [2, "2024-03-02", 2199.0, "completed", "Bank Transfer"],
-      [3, "2024-03-05", 499.0, "completed", "Credit Card"],
-      [4, "2024-03-07", 1299.0, "completed", "PayPal"],
-      [5, "2024-03-10", 299.0, "completed", "Credit Card"],
-      [6, "2024-03-12", 849.0, "completed", "Credit Card"],
-      [7, "2024-03-15", 3698.0, "completed", "Bank Transfer"],
-      [8, "2024-03-18", 599.0, "completed", "PayPal"],
-      [9, "2024-03-20", 1499.0, "completed", "Credit Card"],
-      [10, "2024-03-22", 799.0, "completed", "Credit Card"],
-      [1, "2024-03-25", 299.0, "completed", "Credit Card"],
-      [3, "2024-03-28", 2199.0, "completed", "Bank Transfer"],
-      [5, "2024-04-01", 649.0, "completed", "PayPal"],
-      [11, "2024-04-02", 449.0, "pending", "Credit Card"],
-      [12, "2024-04-03", 1299.0, "completed", "Credit Card"],
-      [13, "2024-04-05", 499.0, "completed", "PayPal"],
-      [14, "2024-04-07", 849.0, "completed", "Credit Card"],
-      [15, "2024-04-09", 2199.0, "completed", "Bank Transfer"],
-      [2, "2024-04-10", 799.0, "completed", "Credit Card"],
-      [4, "2024-04-12", 299.0, "completed", "Credit Card"]
+      [3, "2024-03-05", 499.0, "completed", "Credit Card"]
     ];
 
     for (const [userId, date, total, status, pay] of ordersData) {
@@ -196,49 +348,6 @@ export async function initDb() {
       );
     }
 
-    // Seed Order Items
-    const orderItemsData = [
-      [1, 1, 3, 499.0],
-      [2, 4, 1, 2199.0],
-      [3, 1, 1, 499.0],
-      [4, 2, 1, 1299.0],
-      [5, 5, 1, 299.0],
-      [6, 3, 1, 849.0],
-      [7, 4, 1, 2199.0],
-      [7, 7, 1, 1499.0],
-      [8, 6, 1, 599.0],
-      [9, 7, 1, 1499.0],
-      [10, 8, 1, 799.0],
-      [11, 5, 1, 299.0],
-      [12, 4, 1, 2199.0],
-      [13, 9, 1, 649.0],
-      [14, 10, 1, 449.0],
-      [15, 2, 1, 1299.0]
-    ];
-
-    for (const [orderId, prodId, qty, price] of orderItemsData) {
-      await runSql(
-        `INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?);`,
-        [orderId, prodId, qty, price]
-      );
-    }
-
-    // Seed Reviews
-    const reviewsData = [
-      [1, 1, 5, "Exceptional query speed and seamless developer integration!", "2024-03-10"],
-      [2, 4, 5, "Handles massive database loads with ultra-low latency.", "2024-03-12"],
-      [3, 1, 4, "Great tool for automated SQL workflows.", "2024-03-15"],
-      [4, 2, 5, "Superb cloud analytics suite for enterprise teams.", "2024-03-18"],
-      [5, 5, 5, "Groq AI generation makes writing complex SQL instantaneous!", "2024-03-20"]
-    ];
-
-    for (const [prodId, custId, rating, comment, rdate] of reviewsData) {
-      await runSql(
-        `INSERT INTO reviews (product_id, customer_id, rating, comment, review_date) VALUES (?, ?, ?, ?, ?);`,
-        [prodId, custId, rating, comment, rdate]
-      );
-    }
-
-    console.log("SQLite database initialized and seeded successfully!");
+    console.log("SQLite database initialized successfully!");
   }
 }

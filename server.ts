@@ -3,7 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
-import { initDb, getDbSchema, queryAll } from "./db.js";
+import { initDb, getTargetSchema, executeTargetQuery, testConnection } from "./db.js";
 
 dotenv.config();
 dotenv.config({ path: ".env.local" });
@@ -54,34 +54,51 @@ app.post("/api/config", (req, res) => {
   res.status(400).json({ error: "Invalid API key provided." });
 });
 
-// Live Database Schema Endpoint
-app.get("/api/schema", async (_req, res) => {
+// Test Connection Endpoint (PostgreSQL, MySQL, SQLite)
+app.post("/api/test-connection", async (req, res) => {
+  const { dialect, connectionString } = req.body;
   try {
-    const schema = await getDbSchema();
+    const message = await testConnection({ dialect, connectionString });
+    res.json({ success: true, message });
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error.message || "Connection failed." });
+  }
+});
+
+// Dynamic Live Schema Endpoint for active database (PostgreSQL, MySQL, SQLite)
+app.post("/api/schema", async (req, res) => {
+  try {
+    const { dialect, connectionString } = req.body;
+    const schema = await getTargetSchema({ dialect, connectionString });
     res.json({ success: true, schema });
   } catch (error: any) {
     console.error("Error fetching schema:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch database schema" });
+  }
+});
+
+// GET fallback schema for initial page load
+app.get("/api/schema", async (_req, res) => {
+  try {
+    const schema = await getTargetSchema();
+    res.json({ success: true, schema });
+  } catch (error: any) {
     res.status(500).json({ error: error.message || "Failed to fetch schema" });
   }
 });
 
 // Live SQL Execution Endpoint
 app.post("/api/execute-sql", async (req, res) => {
-  const { sql } = req.body;
+  const { sql, dialect, connectionString } = req.body;
   if (!sql || typeof sql !== "string") {
     return res.status(400).json({ error: "SQL query string is required" });
   }
 
   const startTime = performance.now();
   try {
-    const rows = await queryAll(sql);
+    const { rows, columns } = await executeTargetQuery(sql, { dialect, connectionString });
     const endTime = performance.now();
     const executionTimeMs = Math.round((endTime - startTime) * 100) / 100;
-
-    let columns: string[] = [];
-    if (rows.length > 0) {
-      columns = Object.keys(rows[0]);
-    }
 
     return res.json({
       success: true,
@@ -102,10 +119,10 @@ app.post("/api/execute-sql", async (req, res) => {
   }
 });
 
-// Natural Language -> SQL generation powered by Groq (Supports multi-dialect!)
+// Natural Language -> SQL generation powered by Groq
 app.post("/api/generate-sql", async (req, res) => {
   try {
-    const { prompt, model, definitionOption, dialect = "SQLite" } = req.body;
+    const { prompt, model, definitionOption, dialect = "SQLite", connectionString } = req.body;
 
     if (!prompt || typeof prompt !== "string") {
       return res.status(400).json({ error: "Prompt is required" });
@@ -124,7 +141,12 @@ app.post("/api/generate-sql", async (req, res) => {
       }
     }
 
-    const liveSchema = await getDbSchema();
+    let liveSchema: any[] = [];
+    try {
+      liveSchema = await getTargetSchema({ dialect, connectionString });
+    } catch {
+      liveSchema = await getTargetSchema();
+    }
     const schemaPromptContext = JSON.stringify(liveSchema, null, 2);
 
     if (groq) {
@@ -133,9 +155,9 @@ Given a user query, a target SQL dialect (${dialect}), and live database schema,
 Important rules:
 1. ONLY return a JSON object with keys: "sql", "explanation", "clarificationNeeded".
 2. The "sql" key MUST contain valid ${dialect} SQL without markdown codeblocks in the string.
-3. Use dialect-specific keywords and syntax for ${dialect} (e.g., PostgreSQL vs MySQL vs SQLite).
+3. Use dialect-specific keywords and syntax for ${dialect} (e.g. use double quotes "table" or ILIKE for PostgreSQL if appropriate).
 4. Do NOT invent tables or columns that do not exist in the schema.
-5. Schema details:
+5. Live Schema details:
 ${schemaPromptContext}`;
 
       const userPrompt = `User question: "${prompt}"
@@ -158,9 +180,10 @@ ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
       try {
         parsed = JSON.parse(responseText);
       } catch {
+        const firstTable = liveSchema[0]?.name || "users";
         parsed = {
-          sql: `SELECT u.customer_id, u.name, COUNT(o.order_id) AS total_orders, SUM(o.total_amount) AS total_spent FROM users u JOIN orders o ON u.customer_id = o.customer_id WHERE o.status = 'completed' GROUP BY u.customer_id, u.name ORDER BY total_spent DESC LIMIT 10;`,
-          explanation: `Calculates top customer spending for ${dialect}.`,
+          sql: `SELECT * FROM "${firstTable}" LIMIT 10;`,
+          explanation: `Queries ${firstTable} for ${dialect}.`,
           clarificationNeeded: false
         };
       }
@@ -168,24 +191,11 @@ ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
       return res.json(parsed);
     } else {
       // Fallback SQL generator if GROQ_API_KEY is missing
-      const lower = prompt.toLowerCase();
-      let sql = "";
-      let explanation = "";
-
-      if (lower.includes("revenue") || lower.includes("category")) {
-        sql = `SELECT \n    p.category, \n    SUM(oi.quantity * oi.unit_price) AS total_revenue,\n    COUNT(DISTINCT o.order_id) AS total_orders\nFROM \n    products p\nJOIN \n    order_items oi ON p.id = oi.product_id\nJOIN \n    orders o ON oi.order_id = o.order_id\nWHERE \n    o.status = 'completed'\nGROUP BY \n    p.category\nORDER BY \n    total_revenue DESC;`;
-        explanation = `Aggregates revenue across categories formatted for ${dialect}.`;
-      } else if (lower.includes("product") || lower.includes("stock") || lower.includes("rating")) {
-        sql = `SELECT \n    id, name, category, price, stock_quantity, rating\nFROM \n    products\nWHERE \n    rating >= 4.5\nORDER BY \n    rating DESC, stock_quantity DESC;`;
-        explanation = "Retrieves high-rated products sorted by rating.";
-      } else {
-        sql = `SELECT \n    u.customer_id,\n    u.name,\n    u.region,\n    COUNT(o.order_id) AS total_orders,\n    ROUND(SUM(o.total_amount), 2) AS total_spent\nFROM \n    users u\nJOIN \n    orders o ON u.customer_id = o.customer_id\nWHERE \n    o.status = 'completed'\nGROUP BY \n    u.customer_id, u.name, u.region\nORDER BY \n    total_spent DESC\nLIMIT 10;`;
-        explanation = `Returns top 10 customers by total spend for ${dialect}.`;
-      }
-
+      const firstTable = liveSchema[0]?.name || "users";
+      const sql = `SELECT * FROM "${firstTable}" LIMIT 10;`;
       return res.json({
         sql,
-        explanation: `${explanation} (Note: Set GROQ_API_KEY in Settings for live AI generation).`,
+        explanation: `Queries live ${dialect} database table "${firstTable}". Set GROQ_API_KEY in Settings for AI generation.`,
         clarificationNeeded: false,
         noApiKey: true
       });
@@ -196,17 +206,22 @@ ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
   }
 });
 
-// AI Testing & Analysis Endpoint (Thumbs up / Thumbs down AI evaluation)
+// AI Testing & Analysis Endpoint
 app.post("/api/analyze-sql", async (req, res) => {
   try {
-    const { prompt, sql, dialect = "SQLite", feedbackType = "thumbs_down" } = req.body;
+    const { prompt, sql, dialect = "SQLite", connectionString, feedbackType = "thumbs_down" } = req.body;
 
     if (!sql || typeof sql !== "string") {
       return res.status(400).json({ error: "SQL string is required for AI analysis" });
     }
 
     const groq = getGroqClient();
-    const liveSchema = await getDbSchema();
+    let liveSchema = [];
+    try {
+      liveSchema = await getTargetSchema({ dialect, connectionString });
+    } catch {
+      liveSchema = await getTargetSchema();
+    }
 
     if (groq) {
       const systemInstruction = `You are QueryPilot AI Quality Analyst.
@@ -215,7 +230,7 @@ Output ONLY a JSON object matching this schema:
 {
   "feedbackType": "${feedbackType}",
   "verdict": "Optimal Query" | "Improvement Suggested" | "Potential Syntax Error" | "Schema Mismatch",
-  "explanation": "Detailed technical analysis of correctness, performance, and correctness for ${dialect}.",
+  "explanation": "Detailed technical analysis of correctness, performance, and dialect syntax for ${dialect}.",
   "optimizations": ["Point 1", "Point 2"],
   "suggestedSql": "SELECT ... (Provide improved SQL query if appropriate or requested)"
 }
@@ -241,19 +256,15 @@ ${sql}`;
       let parsed = JSON.parse(text);
       return res.json({ success: true, analysis: parsed });
     } else {
-      // Fallback analysis if Groq key missing
       return res.json({
         success: true,
         analysis: {
           feedbackType,
           verdict: feedbackType === "thumbs_up" ? "Optimal Query" : "Improvement Suggested",
-          explanation: feedbackType === "thumbs_up" 
-            ? "The query correctly joins users and orders with group aggregation."
-            : "Suggested adding table alias filters and indexing customer_id for query speed.",
-          optimizations: [
-            "Ensure customer_id has a B-Tree index",
-            "Consider wrapping floating numbers with ROUND()"
-          ],
+          explanation: feedbackType === "thumbs_up"
+            ? "The query correctly executes against the connected database schema."
+            : "Suggested tuning join conditions and index selection.",
+          optimizations: ["Verify primary key indexing", "Use explicit column list instead of SELECT *"],
           suggestedSql: sql
         }
       });
@@ -282,7 +293,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`QueryPilot Server running with Groq AI Multi-Dialect Engine on http://0.0.0.0:${PORT}`);
+    console.log(`QueryPilot Server running with Live PostgreSQL, MySQL & SQLite Engine on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -23,16 +23,18 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   onAddDatabase,
   onAddHistoryItem
 }) => {
-  // Collapsible panels state for perfect responsiveness!
+  // Collapsible panels state
   const [showLeftPanel, setShowLeftPanel] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
 
   // Schema state
   const [liveSchema, setLiveSchema] = useState<TableSchemaItem[]>([]);
-  const [selectedTable, setSelectedTable] = useState('orders');
+  const [selectedTable, setSelectedTable] = useState('');
+  const [isLoadingSchema, setIsLoadingSchema] = useState(false);
+  const [schemaError, setSchemaError] = useState<string | null>(null);
   
   // Prompt & Model state
-  const [promptText, setPromptText] = useState('Show me top spending customers with completed order details.');
+  const [promptText, setPromptText] = useState('Show me table records with key metrics.');
   const [selectedModel, setSelectedModel] = useState('Llama 3.3 70B Versatile');
   
   // Groq Key state
@@ -45,19 +47,16 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   const [newDbName, setNewDbName] = useState('');
   const [newDbDialect, setNewDbDialect] = useState<SqlDialect>('PostgreSQL');
   const [newDbConnString, setNewDbConnString] = useState('');
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isTestingConn, setIsTestingConn] = useState(false);
 
   // Execution states
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRunningQuery, setIsRunningQuery] = useState(false);
 
   // Generated SQL state
-  const [generatedSql, setGeneratedSql] = useState<string>(
-    `SELECT \n    u.customer_id,\n    u.name,\n    u.region,\n    COUNT(o.order_id) AS total_orders,\n    ROUND(SUM(o.total_amount), 2) AS total_spent\nFROM \n    users u\nJOIN \n    orders o ON u.customer_id = o.customer_id\nWHERE \n    o.status = 'completed'\nGROUP BY \n    u.customer_id, u.name, u.region\nORDER BY \n    total_spent DESC\nLIMIT 10;`
-  );
-
-  const [aiInsight, setAiInsight] = useState<string>(
-    `Generates optimized JOIN query targeting ${activeDatabase?.dialect || 'SQLite'} schema.`
-  );
+  const [generatedSql, setGeneratedSql] = useState<string>('SELECT * FROM users LIMIT 10;');
+  const [aiInsight, setAiInsight] = useState<string>('');
 
   // Live Query Results State
   const [queryResults, setQueryResults] = useState<{
@@ -68,7 +67,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     error?: string;
   } | null>(null);
 
-  // AI Quality Analysis State (Thumbs Up / Down)
+  // AI Quality Analysis State
   const [userRating, setUserRating] = useState<'thumbs_up' | 'thumbs_down' | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
@@ -76,27 +75,42 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
   const [copied, setCopied] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Load live database schema on mount
+  // Load live schema whenever activeDatabase changes!
   useEffect(() => {
-    fetch('/api/schema')
+    if (!activeDatabase) return;
+    setIsLoadingSchema(true);
+    setSchemaError(null);
+
+    fetch('/api/schema', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dialect: activeDatabase.dialect,
+        connectionString: activeDatabase.connectionString
+      })
+    })
       .then(res => res.json())
       .then(data => {
-        if (data.schema && Array.isArray(data.schema)) {
+        if (data.success && Array.isArray(data.schema)) {
           setLiveSchema(data.schema);
           if (data.schema.length > 0) {
             setSelectedTable(data.schema[0].name);
+            setGeneratedSql(`SELECT * FROM "${data.schema[0].name}" LIMIT 10;`);
+          } else {
+            setLiveSchema([]);
           }
+        } else {
+          setSchemaError(data.error || 'Could not fetch database schema.');
         }
       })
-      .catch(err => console.error("Failed to load schema:", err));
+      .catch(err => setSchemaError(err.message || "Failed to load schema"))
+      .finally(() => setIsLoadingSchema(false));
 
     fetch('/api/health')
       .then(res => res.json())
-      .then(data => {
-        setHasApiKey(Boolean(data.hasGroqKey));
-      })
+      .then(data => setHasApiKey(Boolean(data.hasGroqKey)))
       .catch(err => console.error("Health check error:", err));
-  }, []);
+  }, [activeDatabase]);
 
   // Save Groq API Key
   const handleSaveApiKey = async () => {
@@ -120,6 +134,34 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     }
   };
 
+  // Test Database Connection string
+  const handleTestConnection = async () => {
+    if (!newDbConnString.trim()) {
+      setTestResult({ success: false, message: "Please enter a connection string first." });
+      return;
+    }
+    setIsTestingConn(true);
+    setTestResult(null);
+
+    try {
+      const res = await fetch('/api/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dialect: newDbDialect, connectionString: newDbConnString.trim() })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: data.message });
+      } else {
+        setTestResult({ success: false, message: data.error });
+      }
+    } catch (err: any) {
+      setTestResult({ success: false, message: err.message || "Failed to ping database." });
+    } finally {
+      setIsTestingConn(false);
+    }
+  };
+
   // Submit New Database Modal
   const handleSaveNewDb = () => {
     if (!newDbName.trim()) return;
@@ -127,16 +169,17 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
       id: `db-${Date.now()}`,
       name: newDbName.trim(),
       dialect: newDbDialect,
-      connectionString: newDbConnString.trim() || `${newDbDialect.toLowerCase()}://localhost/db`,
+      connectionString: newDbConnString.trim() || undefined,
       status: 'connected'
     };
     onAddDatabase(newDb);
     setShowAddDbModal(false);
     setNewDbName('');
     setNewDbConnString('');
+    setTestResult(null);
   };
 
-  // Generate SQL via Groq AI with target dialect
+  // Generate SQL via Groq AI with target dialect & schema
   const handleGenerate = async () => {
     setIsGenerating(true);
     setAiAnalysis(null);
@@ -149,7 +192,8 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
         body: JSON.stringify({
           prompt: promptText,
           model: selectedModel,
-          dialect: activeDatabase?.dialect || 'SQLite'
+          dialect: activeDatabase?.dialect || 'SQLite',
+          connectionString: activeDatabase?.connectionString
         })
       });
 
@@ -164,7 +208,6 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
         if (data.noApiKey) {
           setHasApiKey(false);
         }
-        // Auto-run query
         handleRunQuery(data.sql);
       }
     } catch (err) {
@@ -174,7 +217,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     }
   };
 
-  // Run SQL Query
+  // Run SQL Query against active Database (PostgreSQL, MySQL, SQLite)
   const handleRunQuery = async (targetSql?: string) => {
     const sqlToRun = targetSql || generatedSql;
     setIsRunningQuery(true);
@@ -184,7 +227,11 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
       const response = await fetch('/api/execute-sql', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql: sqlToRun })
+        body: JSON.stringify({
+          sql: sqlToRun,
+          dialect: activeDatabase?.dialect || 'SQLite',
+          connectionString: activeDatabase?.connectionString
+        })
       });
 
       const data = await response.json();
@@ -231,14 +278,14 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
     }
   };
 
-  // Manual "Save to History" button handler
+  // Manual Save to History
   const handleManualSaveHistory = () => {
     onAddHistoryItem({
       id: `q-manual-${Date.now()}`,
-      question: promptText || "Custom SQL Execution",
+      question: promptText || "Custom Query",
       sql: generatedSql,
       status: queryResults?.error ? 'Failed' : 'Success',
-      model: selectedModel,
+      model: `${selectedModel} (${activeDatabase?.dialect || 'SQLite'})`,
       execTime: queryResults?.execTime || '0ms',
       rowsCount: queryResults?.rowCount || 0,
       date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -262,6 +309,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
           prompt: promptText,
           sql: generatedSql,
           dialect: activeDatabase?.dialect || 'SQLite',
+          connectionString: activeDatabase?.connectionString,
           feedbackType: rating
         })
       });
@@ -303,39 +351,49 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
 
           <div className="flex-1 overflow-y-auto p-2">
             <div className="px-2 py-1.5 text-[11px] font-semibold text-[#938ea1] uppercase tracking-wider">
-              Tables ({liveSchema.length})
+              {activeDatabase?.dialect || 'SQLite'} Tables ({liveSchema.length})
             </div>
-            <div className="space-y-1 mt-1">
-              {liveSchema.map((table) => {
-                const isSelected = selectedTable === table.name;
-                return (
-                  <div
-                    key={table.id}
-                    onClick={() => setSelectedTable(table.name)}
-                    className={`flex items-center justify-between px-2.5 py-2 rounded-md cursor-pointer transition-colors ${
-                      isSelected ? 'bg-[#333538] text-[#e2e2e6]' : 'hover:bg-[#282a2d] text-[#c9c4d8]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`material-symbols-outlined text-[16px] ${isSelected ? 'text-[#cabeff]' : ''}`}>
-                        table
-                      </span>
-                      <span className={`text-sm ${isSelected ? 'font-medium text-[#e2e2e6]' : ''}`}>
-                        {table.name}
+
+            {isLoadingSchema ? (
+              <div className="p-3 text-xs text-[#c9c4d8]">Loading live schema...</div>
+            ) : schemaError ? (
+              <div className="p-3 text-xs text-red-400 bg-red-500/10 rounded border border-red-500/20">{schemaError}</div>
+            ) : (
+              <div className="space-y-1 mt-1">
+                {liveSchema.map((table) => {
+                  const isSelected = selectedTable === table.name;
+                  return (
+                    <div
+                      key={table.id}
+                      onClick={() => {
+                        setSelectedTable(table.name);
+                        setGeneratedSql(`SELECT * FROM "${table.name}" LIMIT 10;`);
+                      }}
+                      className={`flex items-center justify-between px-2.5 py-2 rounded-md cursor-pointer transition-colors ${
+                        isSelected ? 'bg-[#333538] text-[#e2e2e6]' : 'hover:bg-[#282a2d] text-[#c9c4d8]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`material-symbols-outlined text-[16px] ${isSelected ? 'text-[#cabeff]' : ''}`}>
+                          table
+                        </span>
+                        <span className={`text-sm ${isSelected ? 'font-medium text-[#e2e2e6]' : ''}`}>
+                          {table.name}
+                        </span>
+                      </div>
+                      <span className="text-[10px] bg-[#111317] px-1.5 py-0.5 rounded text-[#4ae176] font-mono">
+                        {table.rowCount}
                       </span>
                     </div>
-                    <span className="text-[10px] bg-[#111317] px-1.5 py-0.5 rounded text-[#4ae176] font-mono">
-                      {table.rowCount}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </aside>
       )}
 
-      {/* Main Workspace Column (100% Responsive Full Width!) */}
+      {/* Main Workspace Column */}
       <main className="flex-1 flex flex-col h-full bg-[#111317] relative overflow-y-auto w-full min-w-0">
         <div className="p-4 md:p-6 lg:p-8 max-w-6xl mx-auto w-full flex-1 flex flex-col gap-6">
 
@@ -344,11 +402,11 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl md:text-2xl font-bold text-[#e2e2e6] tracking-tight">Query Workspace</h1>
-                <span className="bg-[#947dff]/20 text-[#cabeff] border border-[#947dff]/30 text-xs font-mono px-2 py-0.5 rounded-md">
-                  {activeDatabase?.dialect || 'SQLite'}
+                <span className="bg-[#4ae176]/15 text-[#4ae176] border border-[#4ae176]/30 text-xs font-mono px-2.5 py-0.5 rounded-md font-semibold">
+                  {activeDatabase?.dialect || 'SQLite'} Connected
                 </span>
               </div>
-              <p className="text-xs text-[#c9c4d8] mt-1">Multi-dialect AI SQL generator & live database engine.</p>
+              <p className="text-xs text-[#c9c4d8] mt-1">Generate AI SQL & execute queries live on {activeDatabase?.name || 'SQLite'}.</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -363,13 +421,13 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <span>Tables</span>
               </button>
 
-              {/* Database Selector Dropdown */}
+              {/* Active Database Selector Dropdown */}
               <div className="flex items-center bg-[#1e2023] border border-[#484555]/40 rounded-lg px-2.5 py-1 text-xs">
                 <span className="material-symbols-outlined text-[16px] text-[#4ae176] mr-1.5">database</span>
                 <select
                   value={activeDatabase?.id}
                   onChange={(e) => onSelectDatabase(e.target.value)}
-                  className="bg-transparent text-[#e2e2e6] outline-none font-medium text-xs cursor-pointer"
+                  className="bg-transparent text-[#e2e2e6] outline-none font-semibold text-xs cursor-pointer"
                 >
                   {databases.map((db) => (
                     <option key={db.id} value={db.id} className="bg-[#111317] text-[#e2e2e6]">
@@ -384,7 +442,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 onClick={() => setShowAddDbModal(true)}
                 className="px-3 py-1.5 rounded-lg bg-[#947dff]/20 hover:bg-[#947dff]/30 border border-[#947dff]/40 text-[#cabeff] transition-colors text-xs font-semibold flex items-center gap-1 cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[16px]">add</span> Add DB
+                <span className="material-symbols-outlined text-[16px]">add</span> Connect DB
               </button>
 
               {/* Toggle Inspector Panel */}
@@ -410,7 +468,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <div>
                   <h4 className="text-sm font-semibold text-[#e2e2e6]">Enter your Groq API Key</h4>
                   <p className="text-xs text-[#c9c4d8] mt-0.5">
-                    Enable live Groq AI generation (`llama-3.3-70b-versatile`). Get a free key at <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-[#cabeff] underline">console.groq.com</a>.
+                    Connect Groq AI (`llama-3.3-70b-versatile`) to generate dynamic SQL. Free key at <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-[#cabeff] underline">console.groq.com</a>.
                   </p>
                 </div>
               </div>
@@ -440,7 +498,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 value={promptText}
                 onChange={(e) => setPromptText(e.target.value)}
                 className="w-full bg-transparent border-none outline-none resize-none min-h-[100px] p-4 text-[#e2e2e6] placeholder:text-[#938ea1] text-sm md:text-base font-sans"
-                placeholder={`Ask anything about your ${activeDatabase?.dialect || 'SQLite'} database... e.g. 'Show me top 5 products by rating' or 'Total orders grouped by region'`}
+                placeholder={`Ask anything about your ${activeDatabase?.name || 'database'} (${activeDatabase?.dialect || 'SQLite'})... e.g. 'Show me top 5 tables or records'`}
               />
               <div className="p-3 pt-0 flex flex-wrap items-center justify-between gap-2 border-t border-[#333538]/50 mt-1">
                 <div className="flex items-center text-[#c9c4d8] text-xs gap-2">
@@ -480,22 +538,16 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
           {/* Quick Example Prompts */}
           <div className="flex flex-wrap gap-2">
             <button 
-              onClick={() => { setPromptText("Show revenue grouped by product category"); handleGenerate(); }}
+              onClick={() => { setPromptText("Show all table records limited to 10 rows"); handleGenerate(); }}
               className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[14px] text-[#4ae176]">trending_up</span> Category Revenue
+              <span className="material-symbols-outlined text-[14px] text-[#4ae176]">table_rows</span> Sample Table Rows
             </button>
             <button 
-              onClick={() => { setPromptText("List products with rating greater than 4.5 sorted by rating"); handleGenerate(); }}
+              onClick={() => { setPromptText("Find top spending entries or aggregated totals"); handleGenerate(); }}
               className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[14px] text-[#cabeff]">star</span> Top Rated Products
-            </button>
-            <button 
-              onClick={() => { setPromptText("Show customer reviews with reviewer name and product name"); handleGenerate(); }}
-              className="px-3 py-1.5 rounded-full bg-[#1e2023] hover:bg-[#282a2d] text-[#c9c4d8] text-xs border border-[#333538] flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[14px] text-[#c3c6ce]">rate_review</span> Customer Reviews
+              <span className="material-symbols-outlined text-[14px] text-[#cabeff]">trending_up</span> Aggregated Metrics
             </button>
           </div>
 
@@ -504,12 +556,11 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
             <div className="flex flex-wrap items-center justify-between bg-[#333538] px-4 py-2 border-b border-[#484555]/30 gap-2">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[16px] text-[#cabeff]">code</span>
-                <span className="text-xs font-mono text-[#e2e2e6]">Generated SQL ({activeDatabase?.dialect || 'SQLite'})</span>
+                <span className="text-xs font-mono text-[#e2e2e6]">Executable {activeDatabase?.dialect || 'SQLite'} SQL</span>
               </div>
 
-              {/* Action Buttons: Copy, Save to History, Thumbs Up / Down */}
+              {/* Action Buttons: Save to History, Thumbs Up / Down, Copy */}
               <div className="flex items-center gap-2">
-                {/* Manual Save to History Button */}
                 <button
                   onClick={handleManualSaveHistory}
                   className="px-2.5 py-1 rounded bg-[#282a2d] hover:bg-[#484555] text-[#c9c4d8] hover:text-white text-xs font-medium flex items-center gap-1 transition-colors relative cursor-pointer"
@@ -522,7 +573,6 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   )}
                 </button>
 
-                {/* Thumbs Up Button */}
                 <button 
                   onClick={() => handleFeedback('thumbs_up')}
                   className={`p-1.5 rounded transition-all cursor-pointer ${
@@ -533,7 +583,6 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   <span className="material-symbols-outlined text-[18px]">thumb_up</span>
                 </button>
 
-                {/* Thumbs Down Button */}
                 <button 
                   onClick={() => handleFeedback('thumbs_down')}
                   className={`p-1.5 rounded transition-all cursor-pointer ${
@@ -544,7 +593,6 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   <span className="material-symbols-outlined text-[18px]">thumb_down</span>
                 </button>
 
-                {/* Copy SQL Button */}
                 <button 
                   onClick={handleCopySql}
                   className="text-[#c9c4d8] hover:text-[#e2e2e6] p-1.5 rounded hover:bg-[#484555] transition-colors relative cursor-pointer"
@@ -589,13 +637,13 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
             </div>
           </div>
 
-          {/* AI Quality Testing & Analysis Overlay (Triggered by Thumbs Up / Down) */}
+          {/* AI Quality Testing & Analysis Overlay */}
           {(isAnalyzing || aiAnalysis) && (
             <div className="bg-[#1e2023] border border-[#947dff]/40 rounded-xl p-5 shadow-xl space-y-3 animate-in fade-in duration-300">
               <div className="flex items-center justify-between border-b border-[#333538] pb-3">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-[#cabeff]">analytics</span>
-                  <h3 className="text-sm font-bold text-[#e2e2e6]">Groq AI Quality & Syntax Analysis</h3>
+                  <h3 className="text-sm font-bold text-[#e2e2e6]">Groq AI Quality Analysis ({activeDatabase?.dialect || 'SQLite'})</h3>
                 </div>
 
                 {aiAnalysis && (
@@ -612,7 +660,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
               {isAnalyzing ? (
                 <div className="flex items-center gap-3 text-xs text-[#c9c4d8] py-4">
                   <span className="material-symbols-outlined animate-spin text-[#947dff]">autorenew</span>
-                  <span>Analyzing SQL correctness, performance, and dialect joins...</span>
+                  <span>Analyzing SQL correctness and dialect joins for {activeDatabase?.name}...</span>
                 </div>
               ) : aiAnalysis ? (
                 <div className="space-y-3 text-xs md:text-sm">
@@ -620,7 +668,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
 
                   {aiAnalysis.optimizations?.length > 0 && (
                     <div className="bg-[#111317] p-3 rounded-lg border border-[#333538] space-y-1">
-                      <div className="font-semibold text-xs text-[#cabeff] mb-1">Key Recommendations:</div>
+                      <div className="font-semibold text-xs text-[#cabeff] mb-1">Recommendations:</div>
                       {aiAnalysis.optimizations.map((tip, i) => (
                         <div key={i} className="flex items-center gap-2 text-xs text-[#c9c4d8]">
                           <span className="text-[#4ae176]">✓</span> {tip}
@@ -632,7 +680,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   {aiAnalysis.suggestedSql && aiAnalysis.suggestedSql !== generatedSql && (
                     <div className="bg-[#0B0D10] p-3 rounded-lg border border-[#947dff]/30 space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono text-[#cabeff]">Suggested Optimized Query:</span>
+                        <span className="text-xs font-mono text-[#cabeff]">Suggested Query:</span>
                         <button
                           onClick={() => {
                             setGeneratedSql(aiAnalysis.suggestedSql!);
@@ -654,21 +702,23 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
           )}
 
           {/* AI Explanation Insight */}
-          <div className="bg-[#947dff]/10 border border-[#947dff]/20 rounded-xl p-4 flex gap-3 items-start">
-            <span className="material-symbols-outlined text-[#cabeff] mt-0.5 text-[20px]">auto_awesome</span>
-            <div>
-              <h4 className="text-xs md:text-sm font-semibold text-[#e2e2e6] mb-1">AI Explanation</h4>
-              <p className="text-xs md:text-sm text-[#c9c4d8] leading-relaxed">
-                {aiInsight}
-              </p>
+          {aiInsight && (
+            <div className="bg-[#947dff]/10 border border-[#947dff]/20 rounded-xl p-4 flex gap-3 items-start">
+              <span className="material-symbols-outlined text-[#cabeff] mt-0.5 text-[20px]">auto_awesome</span>
+              <div>
+                <h4 className="text-xs md:text-sm font-semibold text-[#e2e2e6] mb-1">AI Explanation</h4>
+                <p className="text-xs md:text-sm text-[#c9c4d8] leading-relaxed">
+                  {aiInsight}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Execution Results Section */}
           {queryResults && (
             <div className="mt-2 mb-12 w-full">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                <h3 className="text-lg font-semibold text-[#e2e2e6]">Execution Results</h3>
+                <h3 className="text-lg font-semibold text-[#e2e2e6]">Live Query Execution Results ({activeDatabase?.name || 'SQLite'})</h3>
                 <div className="flex items-center gap-3 text-xs text-[#c9c4d8] font-mono">
                   <span className="bg-[#1e2023] px-2 py-1 rounded border border-[#333538] text-[#4ae176]">
                     {queryResults.rowCount} rows returned
@@ -683,7 +733,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
               {queryResults.error ? (
                 <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-300 text-xs font-mono">
                   <div className="flex items-center gap-2 font-bold mb-1">
-                    <span className="material-symbols-outlined text-[18px]">error</span> SQL Execution Failed
+                    <span className="material-symbols-outlined text-[18px]">error</span> {activeDatabase?.dialect || 'SQL'} Execution Error
                   </div>
                   <div>{queryResults.error}</div>
                 </div>
@@ -692,7 +742,7 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                 <div className="bg-[#1e2023] rounded-xl overflow-x-auto border border-[#333538] shadow-lg w-full">
                   {queryResults.rows.length === 0 ? (
                     <div className="p-8 text-center text-[#c9c4d8] text-sm">
-                      Query executed successfully, but returned 0 matching rows.
+                      Query executed successfully on {activeDatabase?.name}, but returned 0 matching rows.
                     </div>
                   ) : (
                     <table className="w-full text-left border-collapse min-w-[500px]">
@@ -762,14 +812,14 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
         </aside>
       )}
 
-      {/* Add New Database Modal */}
+      {/* Add New Database Modal with Test Connection */}
       {showAddDbModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-[#1e2023] border border-[#333538] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-[#333538] pb-3">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[#4ae176]">add_database</span>
-                <h3 className="text-lg font-bold text-[#e2e2e6]">Add Database Connection</h3>
+                <h3 className="text-lg font-bold text-[#e2e2e6]">Connect Real Database</h3>
               </div>
               <button onClick={() => setShowAddDbModal(false)} className="text-[#938ea1] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
@@ -783,13 +833,13 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   type="text" 
                   value={newDbName}
                   onChange={(e) => setNewDbName(e.target.value)}
-                  placeholder="e.g. Analytics PostgreSQL" 
+                  placeholder="e.g. My Local PostgreSQL" 
                   className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff]" 
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#c9c4d8] mb-1">SQL Dialect</label>
+                <label className="block text-xs font-semibold text-[#c9c4d8] mb-1">SQL Engine / Dialect</label>
                 <select
                   value={newDbDialect}
                   onChange={(e) => setNewDbDialect(e.target.value as SqlDialect)}
@@ -800,35 +850,59 @@ export const QueryWorkspace: React.FC<QueryWorkspaceProps> = ({
                   <option value="SQLite">SQLite</option>
                   <option value="MariaDB">MariaDB</option>
                   <option value="SQL Server">Microsoft SQL Server</option>
-                  <option value="Oracle">Oracle Database</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#c9c4d8] mb-1">Connection String / Host URL</label>
+                <label className="block text-xs font-semibold text-[#c9c4d8] mb-1">Connection String</label>
                 <input 
                   type="text" 
                   value={newDbConnString}
                   onChange={(e) => setNewDbConnString(e.target.value)}
-                  placeholder="postgresql://user:pass@host:5432/dbname" 
+                  placeholder="postgresql://postgres:password@localhost:5432/my_db" 
                   className="w-full bg-[#111317] border border-[#333538] text-[#e2e2e6] rounded-lg p-2.5 text-xs outline-none focus:border-[#947dff] font-mono" 
                 />
+                <p className="text-[11px] text-[#938ea1] mt-1">
+                  Example: <code className="text-[#cabeff]">postgresql://postgres:pass@localhost:5432/dbname</code>
+                </p>
               </div>
+
+              {testResult && (
+                <div className={`p-3 rounded-lg text-xs font-mono border ${
+                  testResult.success 
+                    ? 'bg-[#4ae176]/10 text-[#4ae176] border-[#4ae176]/30' 
+                    : 'bg-red-500/10 text-red-300 border-red-500/30'
+                }`}>
+                  {testResult.message}
+                </div>
+              )}
             </div>
 
-            <div className="pt-3 flex justify-end gap-2 border-t border-[#333538]">
-              <button 
-                onClick={() => setShowAddDbModal(false)} 
-                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#282a2d] text-[#c9c4d8] cursor-pointer"
+            <div className="pt-3 flex items-center justify-between border-t border-[#333538]">
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={isTestingConn}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#282a2d] hover:bg-[#333538] text-[#cabeff] border border-[#484555]/40 transition-colors flex items-center gap-1 cursor-pointer"
               >
-                Cancel
+                <span className={`material-symbols-outlined text-[16px] ${isTestingConn ? 'animate-spin' : ''}`}>sync</span>
+                {isTestingConn ? 'Testing...' : 'Test Connection'}
               </button>
-              <button 
-                onClick={handleSaveNewDb} 
-                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#947dff] text-[#2b0088] hover:bg-[#cabeff] transition-colors cursor-pointer"
-              >
-                Connect Database
-              </button>
+
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setShowAddDbModal(false)} 
+                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#282a2d] text-[#c9c4d8] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleSaveNewDb} 
+                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#947dff] text-[#2b0088] hover:bg-[#cabeff] transition-colors cursor-pointer"
+                >
+                  Connect Database
+                </button>
+              </div>
             </div>
           </div>
         </div>

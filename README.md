@@ -2,7 +2,7 @@
 
 > ### 🎥 Result Video 
 > 
-> [▶️ Watch the QueryPilot Demo](./Project.mp4)
+> <video src="./Project.mp4" controls></video>
 
 ---
 

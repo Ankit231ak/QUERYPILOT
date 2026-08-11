@@ -34,7 +34,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu, onSearch }) =>
           type="text"
           value={searchValue}
           onChange={handleSearchChange}
-          placeholder="Search queries, tables, or docs..."
+          placeholder="Search queries, tables, or history..."
           className="bg-transparent border-none outline-none text-xs md:text-sm text-[#e2e2e6] w-full placeholder:text-[#938ea1]"
         />
         {searchValue && (
@@ -47,24 +47,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu, onSearch }) =>
         )}
       </div>
 
-      {/* Right User Controls */}
-      <div className="flex items-center gap-3 ml-auto">
-        <button 
-          className="relative text-[#c9c4d8] hover:text-[#e2e2e6] p-1.5 rounded-lg hover:bg-[#1e2023] transition-colors"
-          title="Notifications"
-        >
-          <span className="material-symbols-outlined text-[20px]">notifications</span>
-          <span className="absolute top-1 right-1 w-2 h-2 bg-[#947dff] rounded-full"></span>
-        </button>
-        <button 
-          className="text-[#c9c4d8] hover:text-[#e2e2e6] p-1.5 rounded-lg hover:bg-[#1e2023] transition-colors"
-          title="Documentation & Support"
-        >
-          <span className="material-symbols-outlined text-[20px]">help_outline</span>
-        </button>
-        <div className="w-8 h-8 rounded-full bg-[#cabeff] flex items-center justify-center text-[#32009a] font-bold text-xs cursor-pointer shadow-sm">
-          <span className="material-symbols-outlined text-[18px]">person</span>
-        </div>
+      <div className="flex items-center gap-2 ml-auto text-xs text-[#938ea1] font-mono">
+        <span className="w-2 h-2 rounded-full bg-[#4ae176]"></span>
+        <span>QueryPilot Engine</span>
       </div>
     </header>
   );

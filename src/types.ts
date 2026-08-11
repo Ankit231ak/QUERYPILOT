@@ -6,6 +6,8 @@ export type NavigationPath =
 
 export type SqlDialect = 'SQLite' | 'PostgreSQL' | 'MySQL' | 'MariaDB' | 'SQL Server' | 'Oracle';
 
+export type AIProvider = 'Groq' | 'Gemini' | 'OpenAI' | 'Claude' | 'OpenRouter' | 'Local';
+
 export interface DatabaseConfig {
   id: string;
   name: string;
@@ -56,9 +58,13 @@ export interface QueryHistoryItem {
 }
 
 export interface AIAnalysisResult {
-  feedbackType: 'thumbs_up' | 'thumbs_down';
-  verdict: 'Optimal Query' | 'Improvement Suggested' | 'Potential Syntax Error' | 'Schema Mismatch';
+  feedbackType: 'thumbs_up' | 'thumbs_down' | 'better_suggestion' | 'wrong_result';
+  verdict: 'Optimal Query' | 'Improvement Suggested' | 'Potential Syntax Error' | 'Schema Mismatch' | 'Fixed Query Available';
   explanation: string;
   optimizations: string[];
   suggestedSql?: string;
+}
+
+export interface ModelRatings {
+  [modelId: string]: { up: number; down: number };
 }

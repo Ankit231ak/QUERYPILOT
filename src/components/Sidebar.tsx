@@ -13,8 +13,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentPath,
   onNavigate,
   isMobileOpen = false,
-  onCloseMobile,
-  activeDatabase
+  onCloseMobile
 }) => {
   const logoUrl = "https://lh3.googleusercontent.com/aida-public/AB6AXuAPqmh4R-35VMvVyFT8C5QtyJt968YbRHcKH_lFJrPpiN_RNU2PXmtE5fwiDmxVYDuH7-_dnpfIzxHhmLR0yM0gRB6nHrn1z067Bpx7U3uqUrs6chNoV2EGOM7s8IxlesXJdWfpM2VlstSRLFfhZo-C_e-a6UX7FE3NZ9ttN7DkTc-ZH_1_jWdf9ukj9tgm1a4IhR3ZZW5yPoBuf9aZ9HEltZpLLYJJtUv6M2s-TiayNkN1yjrjoS08";
 
@@ -90,35 +89,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="material-symbols-outlined text-[20px]">history</span>
             <span>Query History</span>
           </a>
+        </nav>
 
-          {/* SYSTEM */}
-          <div className="px-3 py-1 mt-6">
-            <span className="text-[11px] font-semibold text-[#938ea1] uppercase tracking-widest">
-              System
-            </span>
-          </div>
+        {/* Footer: Settings Moved Here & Status Removed */}
+        <div className="p-3 border-t border-[#484555]/30 bg-[#0c0e11]">
           <a className={navItemClass('settings')} onClick={() => handleNavClick('settings')}>
             <span className="material-symbols-outlined text-[20px]">settings</span>
             <span>Settings</span>
           </a>
-        </nav>
-
-        {/* Footer Database Status */}
-        <div className="p-4 space-y-2 border-t border-[#484555]/30 bg-[#0c0e11]">
-          <div className="flex items-center justify-between text-[11px] text-[#c9c4d8]">
-            <div className="flex items-center gap-2 truncate">
-              <span className="w-2 h-2 rounded-full bg-[#4ae176] animate-pulse flex-shrink-0"></span>
-              <span className="font-mono text-[11px] truncate">
-                {activeDatabase ? `${activeDatabase.dialect} (${activeDatabase.name})` : 'SQLite Active'}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center justify-between text-[11px] text-[#c9c4d8]">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#947dff]"></span>
-              <span className="font-mono text-[11px]">Groq AI Engine</span>
-            </div>
-          </div>
         </div>
       </aside>
     </>

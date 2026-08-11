@@ -3,7 +3,7 @@
 <h2>🎥 Result Video</h2>
 
 <video
-  src="https://github.com/Ankit231ak/QUERYPILOT/issues/1"
+  src="[https://github.com/Ankit231ak/QUERYPILOT/issues/1](https://github.com/Ankit231ak/QUERYPILOT/issues/1#issue-5119110133)"
   controls
   width="100%">
 </video>

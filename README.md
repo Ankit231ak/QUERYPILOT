@@ -1,9 +1,11 @@
 # QueryPilot - Multi-Engine AI SQL Workspace
 
-> ### 🎥 Result Video 
-> 
-> <video src="./Project.mp4" controls></video>
+> ### 🖼️ Screenshots
 
+<p align="center">
+  <img src="./Demo1.png" width="48%" />
+  <img src="./Demo2.png" width="48%" />
+</p>
 ---
 
 ## What You Built

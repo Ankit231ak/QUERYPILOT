@@ -4,9 +4,14 @@ import { QueryHistoryItem, NavigationPath } from '../types';
 interface QueryHistoryViewProps {
   historyItems: QueryHistoryItem[];
   onNavigate: (path: NavigationPath) => void;
+  onClearHistory?: () => void;
 }
 
-export const QueryHistoryView: React.FC<QueryHistoryViewProps> = ({ historyItems, onNavigate }) => {
+export const QueryHistoryView: React.FC<QueryHistoryViewProps> = ({ 
+  historyItems, 
+  onNavigate,
+  onClearHistory 
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Success' | 'Warning' | 'Failed'>('All');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -31,37 +36,54 @@ export const QueryHistoryView: React.FC<QueryHistoryViewProps> = ({ historyItems
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-[#e2e2e6] mb-1">Query History</h1>
-          <p className="text-sm md:text-base text-[#c9c4d8]">Review and search your past database interactions.</p>
+          <p className="text-sm md:text-base text-[#c9c4d8]">Review, search, and export your persistent query logs.</p>
         </div>
 
-        {/* Search and Filter Bar */}
-        <div className="flex flex-wrap items-center bg-[#1e2023] rounded-xl p-1.5 border border-[#333538] shadow-sm w-full md:w-auto">
-          <div className="flex items-center px-3 gap-2 border-r border-[#333538] py-1 flex-1 md:flex-none">
-            <span className="material-symbols-outlined text-[#c9c4d8] text-[20px]">search</span>
-            <input 
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search questions or SQL..."
-              className="bg-transparent text-[#e2e2e6] text-xs md:text-sm w-full md:w-48 outline-none border-none placeholder:text-[#938ea1]"
-            />
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Search and Filter Bar */}
+          <div className="flex flex-wrap items-center bg-[#1e2023] rounded-xl p-1.5 border border-[#333538] shadow-sm w-full md:w-auto">
+            <div className="flex items-center px-3 gap-2 border-r border-[#333538] py-1 flex-1 md:flex-none">
+              <span className="material-symbols-outlined text-[#c9c4d8] text-[20px]">search</span>
+              <input 
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search history..."
+                className="bg-transparent text-[#e2e2e6] text-xs md:text-sm w-full md:w-40 outline-none border-none placeholder:text-[#938ea1]"
+              />
+            </div>
+
+            <div className="flex items-center px-1.5 gap-1 py-1">
+              {(['All', 'Success', 'Failed'] as const).map((filter) => (
+                <button
+                  key={filter}
+                  onClick={() => setStatusFilter(filter)}
+                  className={`px-2.5 py-1 rounded-lg text-xs transition-colors cursor-pointer ${
+                    statusFilter === filter
+                      ? 'bg-[#333538] text-[#e2e2e6] font-semibold'
+                      : 'text-[#c9c4d8] hover:bg-[#282a2d] hover:text-[#e2e2e6]'
+                  }`}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="flex items-center px-1.5 gap-1 py-1">
-            {(['All', 'Success', 'Warning', 'Failed'] as const).map((filter) => (
-              <button
-                key={filter}
-                onClick={() => setStatusFilter(filter)}
-                className={`px-3 py-1 rounded-lg text-xs transition-colors cursor-pointer ${
-                  statusFilter === filter
-                    ? 'bg-[#333538] text-[#e2e2e6] font-semibold'
-                    : 'text-[#c9c4d8] hover:bg-[#282a2d] hover:text-[#e2e2e6]'
-                }`}
-              >
-                {filter}
-              </button>
-            ))}
-          </div>
+          {/* Clear History Button */}
+          {historyItems.length > 0 && onClearHistory && (
+            <button
+              onClick={() => {
+                if (window.confirm("Are you sure you want to clear your local query history?")) {
+                  onClearHistory();
+                }
+              }}
+              className="px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px]">delete</span>
+              Clear History
+            </button>
+          )}
         </div>
       </div>
 
@@ -73,18 +95,27 @@ export const QueryHistoryView: React.FC<QueryHistoryViewProps> = ({ historyItems
               <tr>
                 <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Question / Query</th>
                 <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Model</th>
+                <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Model / Dialect</th>
                 <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Exec Time</th>
                 <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Rows</th>
-                <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Date</th>
+                <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider">Time</th>
                 <th className="px-6 py-3 text-[11px] font-semibold text-[#c9c4d8] uppercase tracking-wider text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#333538] text-xs md:text-sm">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-[#938ea1]">
-                    No queries found matching your filters.
+                  <td colSpan={7} className="text-center py-16 text-[#938ea1]">
+                    <div className="flex flex-col items-center justify-center gap-3">
+                      <span className="material-symbols-outlined text-[40px] text-[#484555]">history_toggle_off</span>
+                      <p className="text-sm text-[#c9c4d8]">No saved queries in history yet.</p>
+                      <button
+                        onClick={() => onNavigate('query')}
+                        className="px-4 py-2 rounded-lg bg-[#947dff] text-[#2b0088] font-semibold text-xs transition-all hover:bg-[#cabeff] cursor-pointer"
+                      >
+                        Go to Workspace to Run Queries
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -101,23 +132,17 @@ export const QueryHistoryView: React.FC<QueryHistoryViewProps> = ({ historyItems
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      {item.status === 'Success' && (
+                      {item.status === 'Success' ? (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#4ae176]/10 text-[#4ae176] font-mono text-[11px]">
                           <span className="w-1.5 h-1.5 rounded-full bg-[#4ae176]"></span> Success
                         </span>
-                      )}
-                      {item.status === 'Warning' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#ffb4ab]/10 text-[#ffb4ab] font-mono text-[11px]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#ffb4ab]"></span> Warning
-                        </span>
-                      )}
-                      {item.status === 'Failed' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#ffb4ab]/20 text-[#ffb4ab] font-mono text-[11px]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#ffb4ab]"></span> Failed
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/10 text-red-400 font-mono text-[11px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span> Failed
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-[#c9c4d8]">{item.model}</td>
+                    <td className="px-6 py-4 text-[#c9c4d8] font-mono text-xs">{item.model}</td>
                     <td className="px-6 py-4 font-mono text-[#e2e2e6]">{item.execTime}</td>
                     <td className="px-6 py-4 font-mono text-[#e2e2e6]">{item.rowsCount}</td>
                     <td className="px-6 py-4 text-[#c9c4d8]">{item.date}</td>
@@ -149,18 +174,12 @@ export const QueryHistoryView: React.FC<QueryHistoryViewProps> = ({ historyItems
           </table>
         </div>
 
-        {/* Pagination Footer */}
-        <div className="p-4 border-t border-[#333538] bg-[#1a1c1f] flex items-center justify-between">
-          <span className="text-xs text-[#c9c4d8]">Showing 1 to {filteredItems.length} of {historyItems.length} queries</span>
-          <div className="flex gap-2">
-            <button className="px-3 py-1 rounded-lg bg-[#333538] text-[#938ea1] text-xs cursor-not-allowed opacity-50" disabled>
-              Previous
-            </button>
-            <button className="px-3 py-1 rounded-lg bg-[#333538] text-[#e2e2e6] hover:bg-[#484555] text-xs transition-colors cursor-pointer">
-              Next
-            </button>
+        {/* Footer */}
+        {filteredItems.length > 0 && (
+          <div className="p-4 border-t border-[#333538] bg-[#1a1c1f] flex items-center justify-between">
+            <span className="text-xs text-[#c9c4d8]">Showing {filteredItems.length} query records stored in localStorage</span>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
-import { NavigationPath, QueryHistoryItem } from './types';
-import { initialQueryHistory } from './data/mockData';
+import React, { useState, useEffect } from 'react';
+import { NavigationPath, QueryHistoryItem, DatabaseConfig } from './types';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { QueryWorkspace } from './components/QueryWorkspace';
@@ -8,15 +7,101 @@ import { QueryHistoryView } from './components/QueryHistoryView';
 import { DatabaseExplorerView } from './components/DatabaseExplorerView';
 import { SettingsView } from './components/SettingsView';
 
+const DEFAULT_DATABASES: DatabaseConfig[] = [
+  {
+    id: 'db-sqlite-local',
+    name: 'Main SQLite Database',
+    dialect: 'SQLite',
+    connectionString: 'sqlite:///querypilot.db',
+    status: 'connected',
+    isDefault: true
+  },
+  {
+    id: 'db-postgres-prod',
+    name: 'PostgreSQL Analytics DB',
+    dialect: 'PostgreSQL',
+    connectionString: 'postgresql://prod_user:***@postgres.internal:5432/analytics',
+    status: 'connected'
+  },
+  {
+    id: 'db-mysql-sales',
+    name: 'MySQL Sales Database',
+    dialect: 'MySQL',
+    connectionString: 'mysql://sales_admin:***@mysql.internal:3306/sales_db',
+    status: 'connected'
+  }
+];
+
 export default function App() {
   const [currentPath, setCurrentPath] = useState<NavigationPath>('query');
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
-  // Real App Session state
-  const [queryHistory, setQueryHistory] = useState<QueryHistoryItem[]>(initialQueryHistory);
+  // Persistent Databases state
+  const [databases, setDatabases] = useState<DatabaseConfig[]>(() => {
+    try {
+      const saved = localStorage.getItem('querypilot_databases');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error("Failed to load databases from localStorage:", e);
+    }
+    return DEFAULT_DATABASES;
+  });
+
+  const [activeDatabaseId, setActiveDatabaseId] = useState<string>(() => {
+    return databases[0]?.id || 'db-sqlite-local';
+  });
+
+  // Persistent History state
+  const [queryHistory, setQueryHistory] = useState<QueryHistoryItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('querypilot_history');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error("Failed to load history from localStorage:", e);
+    }
+    return [];
+  });
+
+  // Save history to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('querypilot_history', JSON.stringify(queryHistory));
+    } catch (e) {
+      console.error("Failed to save history to localStorage:", e);
+    }
+  }, [queryHistory]);
+
+  // Save databases to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('querypilot_databases', JSON.stringify(databases));
+    } catch (e) {
+      console.error("Failed to save databases to localStorage:", e);
+    }
+  }, [databases]);
 
   const handleAddHistoryItem = (item: QueryHistoryItem) => {
-    setQueryHistory(prev => [item, ...prev]);
+    setQueryHistory(prev => {
+      // Prevent duplicate exact same timestamp
+      const filtered = prev.filter(h => h.id !== item.id);
+      return [item, ...filtered];
+    });
+  };
+
+  const handleClearHistory = () => {
+    setQueryHistory([]);
+    localStorage.removeItem('querypilot_history');
+  };
+
+  const handleAddDatabase = (newDb: DatabaseConfig) => {
+    setDatabases(prev => [...prev, newDb]);
+    setActiveDatabaseId(newDb.id);
   };
 
   const handleGlobalSearch = (query: string) => {
@@ -27,6 +112,8 @@ export default function App() {
     }
   };
 
+  const activeDatabase = databases.find(d => d.id === activeDatabaseId) || databases[0];
+
   return (
     <div className="min-h-screen bg-[#111317] text-[#e2e2e6] font-sans antialiased selection:bg-[#947dff]/30 selection:text-[#cabeff]">
       {/* Navigation Sidebar */}
@@ -35,6 +122,7 @@ export default function App() {
         onNavigate={setCurrentPath}
         isMobileOpen={isMobileOpen}
         onCloseMobile={() => setIsMobileOpen(false)}
+        activeDatabase={activeDatabase}
       />
 
       {/* Top Header Bar */}
@@ -47,7 +135,10 @@ export default function App() {
       <div className="pt-16 lg:pl-72 min-h-screen transition-all duration-300">
         {currentPath === 'query' && (
           <QueryWorkspace 
-            dataSources={[]}
+            databases={databases}
+            activeDatabase={activeDatabase}
+            onSelectDatabase={(id) => setActiveDatabaseId(id)}
+            onAddDatabase={handleAddDatabase}
             onAddHistoryItem={handleAddHistoryItem}
           />
         )}
@@ -56,12 +147,16 @@ export default function App() {
           <QueryHistoryView 
             historyItems={queryHistory}
             onNavigate={setCurrentPath}
+            onClearHistory={handleClearHistory}
           />
         )}
 
         {currentPath === 'database-explorer' && (
           <DatabaseExplorerView 
-            dataSources={[]}
+            databases={databases}
+            activeDatabase={activeDatabase}
+            onSelectDatabase={(id) => setActiveDatabaseId(id)}
+            onAddDatabase={handleAddDatabase}
           />
         )}
 

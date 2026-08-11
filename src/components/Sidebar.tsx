@@ -1,18 +1,20 @@
 import React from 'react';
-import { NavigationPath } from '../types';
+import { NavigationPath, DatabaseConfig } from '../types';
 
 interface SidebarProps {
   currentPath: NavigationPath;
   onNavigate: (path: NavigationPath) => void;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
+  activeDatabase?: DatabaseConfig;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentPath,
   onNavigate,
   isMobileOpen = false,
-  onCloseMobile
+  onCloseMobile,
+  activeDatabase
 }) => {
   const logoUrl = "https://lh3.googleusercontent.com/aida-public/AB6AXuAPqmh4R-35VMvVyFT8C5QtyJt968YbRHcKH_lFJrPpiN_RNU2PXmtE5fwiDmxVYDuH7-_dnpfIzxHhmLR0yM0gRB6nHrn1z067Bpx7U3uqUrs6chNoV2EGOM7s8IxlesXJdWfpM2VlstSRLFfhZo-C_e-a6UX7FE3NZ9ttN7DkTc-ZH_1_jWdf9ukj9tgm1a4IhR3ZZW5yPoBuf9aZ9HEltZpLLYJJtUv6M2s-TiayNkN1yjrjoS08";
 
@@ -104,9 +106,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Footer Database Status */}
         <div className="p-4 space-y-2 border-t border-[#484555]/30 bg-[#0c0e11]">
           <div className="flex items-center justify-between text-[11px] text-[#c9c4d8]">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#4ae176] animate-pulse"></span>
-              <span className="font-mono text-[11px]">SQLite Connected</span>
+            <div className="flex items-center gap-2 truncate">
+              <span className="w-2 h-2 rounded-full bg-[#4ae176] animate-pulse flex-shrink-0"></span>
+              <span className="font-mono text-[11px] truncate">
+                {activeDatabase ? `${activeDatabase.dialect} (${activeDatabase.name})` : 'SQLite Active'}
+              </span>
             </div>
           </div>
           <div className="flex items-center justify-between text-[11px] text-[#c9c4d8]">

@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { DatabaseSource } from '../types';
+import { DatabaseConfig } from '../types';
 
 interface DatabaseExplorerViewProps {
-  dataSources: DatabaseSource[];
+  databases: DatabaseConfig[];
+  activeDatabase: DatabaseConfig;
+  onSelectDatabase: (id: string) => void;
+  onAddDatabase: (db: DatabaseConfig) => void;
 }
 
 interface TableSchemaItem {
@@ -12,7 +15,11 @@ interface TableSchemaItem {
   columns: { name: string; type: string; isPk?: boolean; description?: string }[];
 }
 
-export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = () => {
+export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
+  databases,
+  activeDatabase,
+  onSelectDatabase
+}) => {
   const [liveTables, setLiveTables] = useState<TableSchemaItem[]>([]);
   const [activeTableName, setActiveTableName] = useState('orders');
   const [activeTab, setActiveTab] = useState<'columns' | 'sample'>('columns');
@@ -66,14 +73,31 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = () => {
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto w-full min-h-screen flex flex-col gap-6">
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#333538] pb-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-[#e2e2e6] mb-1">Database Explorer</h1>
-          <p className="text-sm md:text-base text-[#c9c4d8]">Explore real SQLite table schemas, column types, and live sample data.</p>
+          <p className="text-sm md:text-base text-[#c9c4d8]">Inspect schemas, data types, and live records across your databases.</p>
         </div>
-        <div className="flex items-center gap-2">
+        
+        <div className="flex items-center gap-3">
+          {/* Database Selector Dropdown */}
+          <div className="flex items-center bg-[#1e2023] border border-[#484555]/40 rounded-lg px-3 py-1.5 text-xs">
+            <span className="material-symbols-outlined text-[18px] text-[#4ae176] mr-2">database</span>
+            <select
+              value={activeDatabase?.id}
+              onChange={(e) => onSelectDatabase(e.target.value)}
+              className="bg-transparent text-[#e2e2e6] outline-none font-semibold text-xs cursor-pointer"
+            >
+              {databases.map((db) => (
+                <option key={db.id} value={db.id} className="bg-[#111317] text-[#e2e2e6]">
+                  {db.name} ({db.dialect})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#4ae176]/10 text-[#4ae176] font-mono text-xs border border-[#4ae176]/20">
-            <span className="w-2 h-2 rounded-full bg-[#4ae176] animate-pulse"></span> SQLite Live Engine
+            <span className="w-2 h-2 rounded-full bg-[#4ae176] animate-pulse"></span> {activeDatabase?.dialect || 'SQLite'} Connected
           </span>
         </div>
       </header>
@@ -130,7 +154,7 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = () => {
                     {activeTable.rowCount}
                   </span>
                 </div>
-                <p className="text-xs text-[#c9c4d8] mt-1">Live SQLite database table.</p>
+                <p className="text-xs text-[#c9c4d8] mt-1">Live {activeDatabase?.dialect || 'SQLite'} database table schema.</p>
               </div>
 
               <div className="flex gap-2 bg-[#111317] p-1 rounded-lg border border-[#333538]">
@@ -185,7 +209,7 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = () => {
                 <p className="text-xs text-[#938ea1] mb-3">Live 10 sample records from <code className="text-[#cabeff]">{activeTable.name}</code>:</p>
                 
                 {isLoadingSample ? (
-                  <div className="text-xs text-[#c9c4d8] p-4">Loading sample records from SQLite...</div>
+                  <div className="text-xs text-[#c9c4d8] p-4">Loading sample records...</div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse min-w-[500px]">

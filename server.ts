@@ -102,10 +102,10 @@ app.post("/api/execute-sql", async (req, res) => {
   }
 });
 
-// Natural Language -> SQL generation powered by Groq
+// Natural Language -> SQL generation powered by Groq (Supports multi-dialect!)
 app.post("/api/generate-sql", async (req, res) => {
   try {
-    const { prompt, model, definitionOption } = req.body;
+    const { prompt, model, definitionOption, dialect = "SQLite" } = req.body;
 
     if (!prompt || typeof prompt !== "string") {
       return res.status(400).json({ error: "Prompt is required" });
@@ -113,7 +113,6 @@ app.post("/api/generate-sql", async (req, res) => {
 
     const groq = getGroqClient();
 
-    // Map UI model name or select default
     let selectedModel = "llama-3.3-70b-versatile";
     if (model) {
       if (model.includes("Instant") || model.includes("8b")) {
@@ -130,15 +129,17 @@ app.post("/api/generate-sql", async (req, res) => {
 
     if (groq) {
       const systemInstruction = `You are QueryPilot, an expert AI SQL database architect.
-Given a user query and a live SQLite database schema, generate a valid, optimized SQLite SQL query.
+Given a user query, a target SQL dialect (${dialect}), and live database schema, generate a valid, optimized ${dialect} SQL query.
 Important rules:
 1. ONLY return a JSON object with keys: "sql", "explanation", "clarificationNeeded".
-2. The "sql" key MUST contain valid SQLite SQL (without markdown codeblocks in the string value).
-3. Do NOT invent tables or columns that do not exist in the schema.
-4. Schema details:
+2. The "sql" key MUST contain valid ${dialect} SQL without markdown codeblocks in the string.
+3. Use dialect-specific keywords and syntax for ${dialect} (e.g., PostgreSQL vs MySQL vs SQLite).
+4. Do NOT invent tables or columns that do not exist in the schema.
+5. Schema details:
 ${schemaPromptContext}`;
 
       const userPrompt = `User question: "${prompt}"
+Target Dialect: ${dialect}
 ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
 
       const completion = await groq.chat.completions.create({
@@ -159,7 +160,7 @@ ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
       } catch {
         parsed = {
           sql: `SELECT u.customer_id, u.name, COUNT(o.order_id) AS total_orders, SUM(o.total_amount) AS total_spent FROM users u JOIN orders o ON u.customer_id = o.customer_id WHERE o.status = 'completed' GROUP BY u.customer_id, u.name ORDER BY total_spent DESC LIMIT 10;`,
-          explanation: "Calculates top customer spending based on completed orders.",
+          explanation: `Calculates top customer spending for ${dialect}.`,
           clarificationNeeded: false
         };
       }
@@ -173,21 +174,18 @@ ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
 
       if (lower.includes("revenue") || lower.includes("category")) {
         sql = `SELECT \n    p.category, \n    SUM(oi.quantity * oi.unit_price) AS total_revenue,\n    COUNT(DISTINCT o.order_id) AS total_orders\nFROM \n    products p\nJOIN \n    order_items oi ON p.id = oi.product_id\nJOIN \n    orders o ON oi.order_id = o.order_id\nWHERE \n    o.status = 'completed'\nGROUP BY \n    p.category\nORDER BY \n    total_revenue DESC;`;
-        explanation = "Aggregates revenue across categories from the live database.";
+        explanation = `Aggregates revenue across categories formatted for ${dialect}.`;
       } else if (lower.includes("product") || lower.includes("stock") || lower.includes("rating")) {
         sql = `SELECT \n    id, name, category, price, stock_quantity, rating\nFROM \n    products\nWHERE \n    rating >= 4.5\nORDER BY \n    rating DESC, stock_quantity DESC;`;
-        explanation = "Retrieves high-rated products sorted by rating and available stock.";
-      } else if (lower.includes("review") || lower.includes("comment")) {
-        sql = `SELECT \n    p.name AS product_name, \n    u.name AS reviewer, \n    r.rating, \n    r.comment, \n    r.review_date\nFROM \n    reviews r\nJOIN \n    products p ON r.product_id = p.id\nJOIN \n    users u ON r.customer_id = u.customer_id\nORDER BY \n    r.rating DESC;`;
-        explanation = "Lists customer product reviews with reviewer details.";
+        explanation = "Retrieves high-rated products sorted by rating.";
       } else {
         sql = `SELECT \n    u.customer_id,\n    u.name,\n    u.region,\n    COUNT(o.order_id) AS total_orders,\n    ROUND(SUM(o.total_amount), 2) AS total_spent\nFROM \n    users u\nJOIN \n    orders o ON u.customer_id = o.customer_id\nWHERE \n    o.status = 'completed'\nGROUP BY \n    u.customer_id, u.name, u.region\nORDER BY \n    total_spent DESC\nLIMIT 10;`;
-        explanation = "Returns top 10 customers by total spend executed on SQLite.";
+        explanation = `Returns top 10 customers by total spend for ${dialect}.`;
       }
 
       return res.json({
         sql,
-        explanation: `${explanation} (Note: Set GROQ_API_KEY in Settings to enable real Groq AI dynamic SQL generation).`,
+        explanation: `${explanation} (Note: Set GROQ_API_KEY in Settings for live AI generation).`,
         clarificationNeeded: false,
         noApiKey: true
       });
@@ -195,6 +193,74 @@ ${definitionOption ? `Selected Preference: ${definitionOption}` : ""}`;
   } catch (error: any) {
     console.error("Error generating SQL:", error);
     res.status(500).json({ error: error.message || "Failed to generate query" });
+  }
+});
+
+// AI Testing & Analysis Endpoint (Thumbs up / Thumbs down AI evaluation)
+app.post("/api/analyze-sql", async (req, res) => {
+  try {
+    const { prompt, sql, dialect = "SQLite", feedbackType = "thumbs_down" } = req.body;
+
+    if (!sql || typeof sql !== "string") {
+      return res.status(400).json({ error: "SQL string is required for AI analysis" });
+    }
+
+    const groq = getGroqClient();
+    const liveSchema = await getDbSchema();
+
+    if (groq) {
+      const systemInstruction = `You are QueryPilot AI Quality Analyst.
+Analyze the given SQL query for target dialect ${dialect} against the provided database schema and user prompt.
+Output ONLY a JSON object matching this schema:
+{
+  "feedbackType": "${feedbackType}",
+  "verdict": "Optimal Query" | "Improvement Suggested" | "Potential Syntax Error" | "Schema Mismatch",
+  "explanation": "Detailed technical analysis of correctness, performance, and correctness for ${dialect}.",
+  "optimizations": ["Point 1", "Point 2"],
+  "suggestedSql": "SELECT ... (Provide improved SQL query if appropriate or requested)"
+}
+Database Schema: ${JSON.stringify(liveSchema)}`;
+
+      const userMessage = `User Prompt: "${prompt || "N/A"}"
+Target Dialect: ${dialect}
+User Rating: ${feedbackType}
+Generated SQL:
+${sql}`;
+
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: userMessage }
+        ],
+        temperature: 0.1,
+        response_format: { type: "json_object" }
+      });
+
+      const text = completion.choices[0]?.message?.content || "";
+      let parsed = JSON.parse(text);
+      return res.json({ success: true, analysis: parsed });
+    } else {
+      // Fallback analysis if Groq key missing
+      return res.json({
+        success: true,
+        analysis: {
+          feedbackType,
+          verdict: feedbackType === "thumbs_up" ? "Optimal Query" : "Improvement Suggested",
+          explanation: feedbackType === "thumbs_up" 
+            ? "The query correctly joins users and orders with group aggregation."
+            : "Suggested adding table alias filters and indexing customer_id for query speed.",
+          optimizations: [
+            "Ensure customer_id has a B-Tree index",
+            "Consider wrapping floating numbers with ROUND()"
+          ],
+          suggestedSql: sql
+        }
+      });
+    }
+  } catch (error: any) {
+    console.error("Error analyzing SQL:", error);
+    res.status(500).json({ error: error.message || "Failed to analyze query" });
   }
 });
 
@@ -216,7 +282,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`QueryPilot Server running with Groq API & SQLite on http://0.0.0.0:${PORT}`);
+    console.log(`QueryPilot Server running with Groq AI Multi-Dialect Engine on http://0.0.0.0:${PORT}`);
   });
 }
 

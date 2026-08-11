@@ -4,6 +4,21 @@ export type NavigationPath =
   | 'query-history' 
   | 'settings';
 
+export type SqlDialect = 'SQLite' | 'PostgreSQL' | 'MySQL' | 'MariaDB' | 'SQL Server' | 'Oracle';
+
+export interface DatabaseConfig {
+  id: string;
+  name: string;
+  dialect: SqlDialect;
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  status: 'connected' | 'disconnected';
+  isDefault?: boolean;
+}
+
 export interface DatabaseColumn {
   name: string;
   type: string;
@@ -37,4 +52,13 @@ export interface QueryHistoryItem {
   rowsCount: number | string;
   date: string;
   timestamp: number;
+  userFeedback?: 'thumbs_up' | 'thumbs_down';
+}
+
+export interface AIAnalysisResult {
+  feedbackType: 'thumbs_up' | 'thumbs_down';
+  verdict: 'Optimal Query' | 'Improvement Suggested' | 'Potential Syntax Error' | 'Schema Mismatch';
+  explanation: string;
+  optimizations: string[];
+  suggestedSql?: string;
 }

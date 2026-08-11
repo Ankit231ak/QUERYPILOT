@@ -1,0 +1,11 @@
+{
+  "apiKeys": {
+    "Groq": "",
+    "Gemini": "",
+    "OpenAI": "",
+    "Claude": "",
+    "OpenRouter": ""
+  },
+  "localEndpointUrl": "http://localhost:1234/v1",
+  "cacheEnabledGlobally": false
+}

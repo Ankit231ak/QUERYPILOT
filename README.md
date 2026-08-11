@@ -2,7 +2,7 @@
 
 > ### 🎥 Result Video 
 > 
-> ![QueryPilot Result Video](./Project.mp4)
+> [▶️ Watch the QueryPilot Demo](./Project.mp4)
 
 ---
 
